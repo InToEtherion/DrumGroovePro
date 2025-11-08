@@ -27,6 +27,7 @@ void FavoritesModel::paintListBoxItem(int rowNumber, juce::Graphics& g,
     }
     else
     {
+        // 100% transparent background - only draw text
         g.setColour(ColourPalette::primaryText);
     }
     
@@ -34,8 +35,7 @@ void FavoritesModel::paintListBoxItem(int rowNumber, juce::Graphics& g,
     g.setFont(lnf.getNormalFont());
     g.drawText(text, 4, 0, width - 8, height, juce::Justification::centredLeft);
     
-    g.setColour(ColourPalette::separator);
-    g.drawLine(0.0f, static_cast<float>(height - 1), static_cast<float>(width), static_cast<float>(height - 1));
+    // Removed separator line for transparency
 }
 
 // FolderPanel implementation
@@ -56,23 +56,26 @@ FolderPanel::FolderPanel(DrumGrooveProcessor& p)
     aboutButton.addListener(this);
     addAndMakeVisible(aboutButton);
     
-    folderGroup.setText("Library Folders");
-    folderGroup.setColour(juce::GroupComponent::textColourId, ColourPalette::primaryBlue);
-    addAndMakeVisible(folderGroup);
+	folderGroupLabel.setText("Library Folders", juce::dontSendNotification);
+	folderGroupLabel.setFont(lnf.getNormalFont().withHeight(18.0f).boldened());
+	folderGroupLabel.setColour(juce::Label::textColourId, ColourPalette::primaryBlue);
+	folderGroupLabel.setJustificationType(juce::Justification::centredLeft);
+	addAndMakeVisible(folderGroupLabel);
     
     folderCountLabel.setText("0 folder(s) loaded", juce::dontSendNotification);
     folderCountLabel.setFont(lnf.getSmallFont());
     folderCountLabel.setColour(juce::Label::textColourId, ColourPalette::mutedText);
     addAndMakeVisible(folderCountLabel);
     
-    folderList.setModel(this);
+    // CRITICAL FIX: Use setActualModel for delegation pattern
+    folderList.setActualModel(this);
     folderList.setRowHeight(24);
-    folderList.setColour(juce::ListBox::backgroundColourId, ColourPalette::secondaryBackground);
+    folderList.setColour(juce::ListBox::backgroundColourId, ColourPalette::mainBackground.withAlpha(0.5f));
     
     // Setup viewport for folder list scrolling
     folderViewport = std::make_unique<juce::Viewport>();
     folderViewport->setViewedComponent(&folderList, false);
-    folderViewport->setScrollBarsShown(false, true);  // Vertical scrollbar only
+    folderViewport->setScrollBarsShown(true, false);
     
     // Style the scrollbars to match the theme
     folderViewport->getVerticalScrollBar().setColour(juce::ScrollBar::backgroundColourId, ColourPalette::secondaryBackground);
@@ -84,6 +87,29 @@ FolderPanel::FolderPanel(DrumGrooveProcessor& p)
         removeSelectedFolders();
     };
     
+    // CRITICAL FIX: Add right-click handler for library folders
+    folderList.onRightClick = [this](int row) {
+        if (row < 0 || row >= processor.drumLibraryManager.getNumRootFolders())
+            return;
+        
+        juce::PopupMenu menu;
+        menu.addItem(1, "Remove Folder");
+        
+        auto mousePos = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition();
+        
+        menu.showMenuAsync(
+            juce::PopupMenu::Options()
+                .withTargetScreenArea(juce::Rectangle<int>(static_cast<int>(mousePos.x), 
+                                                           static_cast<int>(mousePos.y), 1, 1)),
+            [this, row](int result) {
+                if (result == 1) // Remove
+                {
+                    processor.drumLibraryManager.removeRootFolder(row);
+                    refreshFolderList();
+                }
+            });
+    };
+    
     folderSelectedCallback = [this](int index) {
         if (index >= 0 && index < processor.drumLibraryManager.getNumRootFolders())
         {
@@ -93,9 +119,11 @@ FolderPanel::FolderPanel(DrumGrooveProcessor& p)
         }
     };
     
-    fileInfoGroup.setText("Favorites");
-    fileInfoGroup.setColour(juce::GroupComponent::textColourId, ColourPalette::primaryBlue);
-    addAndMakeVisible(fileInfoGroup);
+    fileInfoGroupLabel.setText("Favorites", juce::dontSendNotification);
+	fileInfoGroupLabel.setFont(lnf.getNormalFont().withHeight(18.0f).boldened());
+	fileInfoGroupLabel.setColour(juce::Label::textColourId, ColourPalette::primaryBlue);
+	fileInfoGroupLabel.setJustificationType(juce::Justification::centredLeft);
+	addAndMakeVisible(fileInfoGroupLabel);
     
     favoritesModel = std::make_unique<FavoritesModel>(processor);
     
@@ -111,12 +139,12 @@ FolderPanel::FolderPanel(DrumGrooveProcessor& p)
     
     favoritesList.setActualModel(favoritesModel.get());
     favoritesList.setRowHeight(24);
-    favoritesList.setColour(juce::ListBox::backgroundColourId, ColourPalette::secondaryBackground);
+    favoritesList.setColour(juce::ListBox::backgroundColourId, ColourPalette::mainBackground.withAlpha(0.5f));
     
     // Setup viewport for favorites list scrolling
     favoritesViewport = std::make_unique<juce::Viewport>();
     favoritesViewport->setViewedComponent(&favoritesList, false);
-    favoritesViewport->setScrollBarsShown(false, true);  // Vertical scrollbar only
+    favoritesViewport->setScrollBarsShown(true, false);
     
     // Style the scrollbars to match the theme
     favoritesViewport->getVerticalScrollBar().setColour(juce::ScrollBar::backgroundColourId, ColourPalette::secondaryBackground);
@@ -251,7 +279,8 @@ FolderPanel::~FolderPanel() = default;
 
 void FolderPanel::paint(juce::Graphics& g)
 {
-    g.fillAll(ColourPalette::panelBackground);
+    // 100% transparent - no background fill
+    // Background image from MainComponent will show through completely
 }
 
 void FolderPanel::resized()
@@ -275,7 +304,7 @@ void FolderPanel::resized()
     
     // Rest of the layout
     auto folderSection = bounds.removeFromTop(200);
-    folderGroup.setBounds(folderSection);
+    folderGroupLabel.setBounds(folderSection.removeFromTop(20));
     
     auto folderContent = folderSection.reduced(10).withTrimmedTop(15);
     folderCountLabel.setBounds(folderContent.removeFromTop(18));
@@ -289,7 +318,7 @@ void FolderPanel::resized()
     
     bounds.removeFromTop(10);
     
-    fileInfoGroup.setBounds(bounds);
+    fileInfoGroupLabel.setBounds(bounds.removeFromTop(20));
     auto infoContent = bounds.reduced(10).withTrimmedTop(15);
     
     favoritesViewport->setBounds(infoContent);
@@ -405,6 +434,7 @@ void FolderPanel::paintListBoxItem(int rowNumber, juce::Graphics& g,
     }
     else
     {
+        // 100% transparent background - only draw text
         g.setColour(ColourPalette::primaryText);
     }
     
@@ -412,8 +442,7 @@ void FolderPanel::paintListBoxItem(int rowNumber, juce::Graphics& g,
     g.setFont(lnf.getNormalFont());
     g.drawText(folderNames[rowNumber], 4, 0, width - 8, height, juce::Justification::centredLeft);
     
-    g.setColour(ColourPalette::separator);
-    g.drawLine(0.0f, static_cast<float>(height - 1), static_cast<float>(width), static_cast<float>(height - 1));
+    // Removed separator line for transparency
 }
 
 void FolderPanel::selectedRowsChanged(int lastRowSelected)

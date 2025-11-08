@@ -17,7 +17,8 @@ struct MidiClip
     double startTime = 0.0;
     double duration = 4.0;
     double originalBPM = 120.0;
-    double referenceBPM = 120.0;  // NEW: Track BPM when clip was added
+    double referenceBPM = 120.0; 
+	DrumLibrary sourceLibrary = DrumLibrary::Unknown;
     juce::Colour colour;
     bool isSelected = false;
     juce::String id = juce::Uuid().toString();
@@ -98,6 +99,8 @@ private:
     bool isExternalDragActive = false;
     juce::File lastTempDragFile;
     
+	double getBPMFromMidiFile(const juce::File& file) const;
+	
     // External drag method
     void startExternalDrag();
 

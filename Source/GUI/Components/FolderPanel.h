@@ -88,13 +88,53 @@ private:
 // ============================================================================
 // FolderListBox - For library folders
 // ============================================================================
-class FolderListBox : public juce::ListBox
+class FolderListBox : public juce::ListBox,
+                      public juce::ListBoxModel
 {
 public:
     FolderListBox() : juce::ListBox() 
     {
         setMultipleSelectionEnabled(false);
         setWantsKeyboardFocus(true);
+        setModel(this);
+    }
+    
+    // ListBoxModel overrides - delegate to actual model
+    int getNumRows() override
+    {
+        if (actualModel)
+            return actualModel->getNumRows();
+        return 0;
+    }
+    
+    void paintListBoxItem(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override
+    {
+        if (actualModel)
+            actualModel->paintListBoxItem(rowNumber, g, width, height, rowIsSelected);
+    }
+    
+    void listBoxItemClicked(int row, const juce::MouseEvent& e) override
+    {
+        if (e.mods.isPopupMenu() && onRightClick)
+        {
+            onRightClick(row);
+            return;
+        }
+        
+        if (actualModel)
+            actualModel->selectedRowsChanged(row);
+    }
+    
+    void selectedRowsChanged(int lastRowSelected) override
+    {
+        if (actualModel)
+            actualModel->selectedRowsChanged(lastRowSelected);
+    }
+    
+    void setActualModel(juce::ListBoxModel* model)
+    {
+        actualModel = model;
+        updateContent();
     }
     
     bool keyPressed(const juce::KeyPress& key) override
@@ -110,7 +150,11 @@ public:
         return juce::ListBox::keyPressed(key);
     }
     
+    std::function<void(int)> onRightClick;
     std::function<void()> onDeletePressed;
+    
+private:
+    juce::ListBoxModel* actualModel = nullptr;
 };
 
 // ============================================================================
@@ -170,12 +214,12 @@ private:
     juce::TextButton rescanButton;
     juce::TextButton aboutButton;
     
-    juce::GroupComponent folderGroup;
+    juce::Label folderGroupLabel;  // CHANGED from GroupComponent to Label
     juce::Label folderCountLabel;
     FolderListBox folderList;
     std::unique_ptr<juce::Viewport> folderViewport;
     
-    juce::GroupComponent fileInfoGroup;
+    juce::Label fileInfoGroupLabel;  // CHANGED from GroupComponent to Label
     juce::Label favoritesLabel;
     FavoritesListBox favoritesList;
     std::unique_ptr<juce::Viewport> favoritesViewport;

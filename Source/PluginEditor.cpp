@@ -278,3 +278,28 @@ void DrumGrooveEditor::timerCallback()
     if (mainComponent)
         mainComponent->updateBPMDisplay();
 }
+
+// CRITICAL FIX: Override focus methods to prevent playback stopping when focus is lost
+// By providing empty implementations, we prevent JUCE's default behavior from interfering with playback
+void DrumGrooveEditor::focusLost(FocusChangeType)
+{
+    // DO NOTHING - keep playback running even when focus is lost
+    // This allows the plugin to continue playing when user clicks outside the window
+}
+
+void DrumGrooveEditor::focusGained(FocusChangeType)
+{
+    // DO NOTHING - normal behavior continues
+    // No special action needed when focus is regained
+}
+
+// CRITICAL FIX: Override visibilityChanged to prevent playback stopping when minimized
+void DrumGrooveEditor::visibilityChanged()
+{
+    // Call base class but do NOT stop playback
+    // This allows the plugin to keep playing even when minimized or hidden
+    Component::visibilityChanged();
+    
+    // Note: We do NOT call any stop/pause methods here
+    // The audio processing continues independently of GUI visibility
+}

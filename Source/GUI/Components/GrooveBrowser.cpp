@@ -71,7 +71,8 @@ BrowserColumn::BrowserColumn(const juce::String& columnName, DrumGrooveProcessor
 {
     setModel(this);
     setRowHeight(24);
-    setColour(juce::ListBox::backgroundColourId, ColourPalette::mainBackground);
+    // Semi-transparent background (0.7f alpha) for navigation columns
+    setColour(juce::ListBox::backgroundColourId, ColourPalette::mainBackground.withAlpha(0.75f));
     setMultipleSelectionEnabled(false);
     loadIcons();
 }
@@ -169,7 +170,7 @@ void BrowserColumn::paintListBoxItem(int rowNumber, juce::Graphics& g,
     }
     else
     {
-        g.fillAll(ColourPalette::mainBackground);
+        // 100% transparent background - only draw text and icons
         g.setColour(ColourPalette::secondaryText);
 
         if (isMouseOver())
@@ -178,7 +179,8 @@ void BrowserColumn::paintListBoxItem(int rowNumber, juce::Graphics& g,
             auto itemBounds = getRowPosition(rowNumber, true);
             if (itemBounds.contains(mousePos))
             {
-                g.fillAll(ColourPalette::secondaryBackground);
+                // Optional: Add a subtle highlight on hover (semi-transparent)
+                g.fillAll(ColourPalette::secondaryBackground.withAlpha(0.3f));
                 g.setColour(ColourPalette::primaryText);
             }
         }
@@ -203,10 +205,6 @@ void BrowserColumn::paintListBoxItem(int rowNumber, juce::Graphics& g,
 
     juce::String text = items[rowNumber];
     g.drawText(text, 24, 0, width - 28, height, juce::Justification::centredLeft);
-
-    // Draw separator
-    g.setColour(ColourPalette::separator);
-    g.drawLine(0.0f, static_cast<float>(height - 1), static_cast<float>(width), static_cast<float>(height - 1));
 }
 
 void BrowserColumn::selectedRowsChanged(int lastRow)
@@ -653,7 +651,8 @@ GrooveBrowser::~GrooveBrowser()
 
 void GrooveBrowser::paint(juce::Graphics& g)
 {
-    g.fillAll(ColourPalette::panelBackground);
+    // 100% transparent - no background fill
+    // Background image from MainComponent will show through completely
 }
 
 void GrooveBrowser::resized()
@@ -883,9 +882,9 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
             headerBPM = processor.parameters.getRawParameterValue("manualBPM")->load();
         }
 
-        // ✅ FIX: Pass original MIDI BPM (120.0) as reference, header BPM as target
+        // âœ… FIX: Pass original MIDI BPM (120.0) as reference, header BPM as target
         // This makes the file play faster/slower based on header BPM
-        processor.midiProcessor.addMidiClip(file, 0.0, sourceLib, 120.0, headerBPM, 0);
+        processor.midiProcessor.addMidiClip(file, 0.0, sourceLib, 120.0, headerBPM, 0, 10.0, "preview_" + juce::Uuid().toString());
         processor.midiProcessor.setPlayheadPosition(0.0);
         processor.midiProcessor.play();
 
@@ -1065,6 +1064,12 @@ void GrooveBrowser::addFolderColumn(const juce::String& title, bool isFileColumn
     column->onDoubleClick = [this, column](int row) {
         int columnIndex = folderColumns.indexOf(column);
         handleColumnDoubleClick(columnIndex, row);
+    };
+    
+    // CRITICAL FIX: Set up right-click callback for folders
+    column->onRightClickFolder = [this](const juce::File& folder) {
+        // The showContextMenu in BrowserColumn already handles this
+        // This callback is just to enable the functionality
     };
 
     column->setSize(isFileColumn ? FILE_COLUMN_WIDTH : FOLDER_COLUMN_WIDTH, COLUMN_HEIGHT_MIN);
@@ -1388,12 +1393,8 @@ void BrowserColumn::showContextMenu(int row, const juce::Point<int>& position)
 
 void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
 {
-    DBG("=== EXPORT TO DESKTOP WITH BPM ADJUSTMENT ===");
-    DBG("File: " + originalMidiFile.getFileName());
-    
     if (!originalMidiFile.existsAsFile())
     {
-        DBG("ERROR: File doesn't exist");
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
             "Export Error", "File doesn't exist!", "OK");
         return;
@@ -1403,14 +1404,12 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
     double currentBPM = syncToHost ? processor.getHostBPM() 
                                    : processor.parameters.getRawParameterValue("manualBPM")->load();
-    DBG("Plugin BPM: " + juce::String(currentBPM, 2));
     
     // Read original MIDI file
     juce::MidiFile originalMidi;
     juce::FileInputStream inputStream(originalMidiFile);
     if (!inputStream.openedOk() || !originalMidi.readFrom(inputStream))
     {
-        DBG("ERROR: Failed to read MIDI file");
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
             "Export Error", "Failed to read MIDI file!", "OK");
         return;
@@ -1435,7 +1434,6 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
             if (originalBPM != 120.0) break;
         }
     }
-    DBG("Original BPM: " + juce::String(originalBPM, 2));
     
     // Get Desktop directory
     auto desktopDir = juce::File::getSpecialLocation(juce::File::userDesktopDirectory);
@@ -1461,11 +1459,9 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     
     if (needsAdjustment)
     {
-        DBG("Creating BPM-adjusted file...");
         
-        // ✅ CORRECTED: originalBPM / currentBPM (was backwards!)
+        // âœ… CORRECTED: originalBPM / currentBPM (was backwards!)
         double timeStretchRatio = originalBPM / currentBPM;
-        DBG("Time stretch ratio: " + juce::String(timeStretchRatio, 4));
         
         // Create adjusted MIDI file
         juce::MidiFile adjustedMidi;
@@ -1519,7 +1515,6 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
         }
         else
         {
-            DBG("ERROR: Could not create output stream");
             juce::AlertWindow::showMessageBoxAsync(
                 juce::AlertWindow::WarningIcon,
                 "Export Error",
@@ -1531,13 +1526,11 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     else
     {
         // No BPM adjustment needed - just copy the file
-        DBG("No BPM adjustment needed, copying original file");
         
         bool success = originalMidiFile.copyFileTo(exportFile);
         
         if (!success)
         {
-            DBG("ERROR: Could not copy file");
             juce::AlertWindow::showMessageBoxAsync(
                 juce::AlertWindow::WarningIcon,
                 "Export Error",
@@ -1550,13 +1543,12 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     // Verify export was successful
     if (exportFile.existsAsFile() && exportFile.getSize() > 0)
     {
-        DBG("Successfully exported to: " + exportFile.getFullPathName());
         
         // Show success message with BPM info
         juce::String message = "MIDI file exported to Desktop";
         if (needsAdjustment)
         {
-            message += "\n\nBPM adjusted: " + juce::String(originalBPM, 1) + " → " + juce::String(currentBPM, 1);
+            message += "\n\nBPM adjusted: " + juce::String(originalBPM, 1) + " â†’ " + juce::String(currentBPM, 1);
         }
         message += "\n\nFile: " + exportFile.getFileName();
         
@@ -1578,7 +1570,6 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     }
     else
     {
-        DBG("ERROR: Export file is empty or doesn't exist");
         juce::AlertWindow::showMessageBoxAsync(
             juce::AlertWindow::WarningIcon,
             "Export Error",

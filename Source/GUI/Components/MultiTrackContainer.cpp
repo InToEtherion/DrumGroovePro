@@ -209,6 +209,9 @@ void FixedRulerRow::drawRuler(juce::Graphics& g)
     auto& lnf = DrumGrooveLookAndFeel::getInstance();
     g.setFont(lnf.getSmallFont());
     
+    // CRITICAL FIX: Read viewportX directly from parent to ensure perfect sync
+    int currentViewportX = viewportX;
+    
     // Calculate grid intervals based on zoom level
     double mainGridStep;
     double subGridStep;
@@ -244,7 +247,7 @@ void FixedRulerRow::drawRuler(juce::Graphics& g)
         g.setColour(juce::Colour(0xff707070));  // Dimmer color for sub-grid
         for (double time = subGridStep; time <= maxTime; time += mainGridStep)
         {
-            float x = static_cast<float>(time * zoomLevel) - viewportX;
+            float x = static_cast<float>(time * zoomLevel) - currentViewportX;
             
             if (x >= 0 && x <= getWidth())
             {
@@ -260,9 +263,10 @@ void FixedRulerRow::drawRuler(juce::Graphics& g)
     
     juce::String lastTimeText = "";  // Track last label to avoid duplicates
     
-    for (double time = 0.0; time <= maxTime; time += mainGridStep)
+    // CRITICAL FIX: Start from mainGridStep to skip 0:00 marker
+    for (double time = mainGridStep; time <= maxTime; time += mainGridStep)
     {
-        float x = static_cast<float>(time * zoomLevel) - viewportX;
+        float x = static_cast<float>(time * zoomLevel) - currentViewportX;
         
         if (x >= -30 && x <= getWidth() + 30)  // Draw slightly outside visible area
         {
@@ -602,7 +606,7 @@ void MultiTrackContainer::resized()
 
 void MultiTrackContainer::updateScrollbarVisibility()
 {
-    // ✅ REMOVED: isUpdatingLayout guard - this method needs to run even during layout updates
+    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ REMOVED: isUpdatingLayout guard - this method needs to run even during layout updates
     // The scrollbar visibility logic doesn't trigger layout changes, so it's safe
     
     if (!timelineContent)
@@ -927,12 +931,9 @@ void MultiTrackContainer::itemDropped(const SourceDetails& details)
 void MultiTrackContainer::play()
 {
     playing = true;
-    lastPlaybackTime = juce::Time::getMillisecondCounterHiRes() / 1000.0;
     
-    // Clear all clips first to remove any deleted clips
     processor.midiProcessor.clearAllClips();
     
-    // Check if ANY track is soloed
     bool anySoloed = false;
     for (size_t i = 0; i < tracks.size(); ++i)
     {
@@ -943,22 +944,18 @@ void MultiTrackContainer::play()
         }
     }
     
-    // Add clips based on mute/solo state
     for (size_t i = 0; i < tracks.size(); ++i)
     {
         const auto& track = tracks[i];
         
-        // Proper solo/mute logic
         bool shouldPlay = false;
         
         if (anySoloed)
         {
-            // If ANY track is soloed, ONLY play soloed tracks (unless they're also muted)
             shouldPlay = track->isSoloed() && !track->isMuted();
         }
         else
         {
-            // If NO tracks are soloed, play all tracks that aren't muted
             shouldPlay = !track->isMuted();
         }
         
@@ -968,34 +965,37 @@ void MultiTrackContainer::play()
             int trackNumber = static_cast<int>(i) + 1;
             
             for (const auto& clip : track->getClips())
-            {
-                processor.midiProcessor.addMidiClip(clip->file, clip->startTime, 
-                                                   DrumLibrary::Unknown, 
-                                                   clip->referenceBPM, 
-                                                   trackBPM, 
-                                                   trackNumber);
-            }
+			{
+				processor.midiProcessor.addMidiClip(clip->file, clip->startTime, 
+												DrumLibrary::Unknown, 
+												clip->referenceBPM, 
+												trackBPM, 
+												trackNumber,
+												clip->duration,
+												clip->id);
+			}
         }
     }
     
-       // Set up loop if enabled and selection exists
-       if (loopEnabled && selectionValid)
-       {
-           processor.midiProcessor.setLoopEnabled(true);
-           processor.midiProcessor.setLoopRange(selectionStart, selectionEnd);
-           
-           // Start playback from selection start if playhead is outside selection
-           if (playheadPosition < selectionStart || playheadPosition > selectionEnd)
-           {
-               playheadPosition = selectionStart;
-               processor.midiProcessor.setPlayheadPosition(selectionStart);
-           }
-       }
-       else
-       {
-           processor.midiProcessor.setLoopEnabled(false);
-       }
+    if (loopEnabled && selectionValid)
+    {
+        processor.midiProcessor.setLoopEnabled(true);
+        processor.midiProcessor.setLoopRange(selectionStart, selectionEnd);
+        
+        if (playheadPosition < selectionStart || playheadPosition > selectionEnd)
+        {
+            playheadPosition = selectionStart;
+            processor.midiProcessor.setPlayheadPosition(selectionStart);
+        }
+    }
+    else
+    {
+        processor.midiProcessor.setLoopEnabled(false);
+    }
+    
+    processor.midiProcessor.setPlaybackSpeed(playbackSpeed);
     processor.midiProcessor.play();
+    startTimer(16);
     repaint();
 }
 
@@ -1011,14 +1011,45 @@ void MultiTrackContainer::stop()
     playing = false;
     playheadPosition = 0.0;
     processor.midiProcessor.stop();
+    stopTimer();
+    
+    // CRITICAL FIX: Reset viewport scroll position to beginning (time 0)
+    viewport.setViewPosition(0, viewport.getViewPositionY());
+    
+    // Also reset ruler's viewport position
+    if (fixedRulerRow)
+    {
+        fixedRulerRow->setViewportX(0);
+    }
+    
     repaint();
 }
 
 void MultiTrackContainer::setPlayheadPosition(double timeInSeconds)
 {
     playheadPosition = juce::jmax(0.0, timeInSeconds);
-    processor.midiProcessor.setPlayheadPosition(playheadPosition);
+    
+    if (!playing)
+    {
+        processor.midiProcessor.setPlayheadPosition(playheadPosition);
+    }
+    
     repaint();
+}
+
+double MultiTrackContainer::getPlayheadPosition() const
+{
+    if (playing)
+    {
+        return processor.midiProcessor.getPlayheadPosition();
+    }
+    return playheadPosition;
+}
+
+void MultiTrackContainer::setPlaybackSpeed(double speed)
+{
+    playbackSpeed = juce::jlimit(0.25, 2.0, speed);
+    processor.midiProcessor.setPlaybackSpeed(playbackSpeed);
 }
 
 void MultiTrackContainer::setLoopStart(double timeInSeconds)
@@ -1423,7 +1454,7 @@ void MultiTrackContainer::addTrack()
     // Force complete layout update
     resized();
     
-    // ✅ CRITICAL FIX: Update scrollbar visibility AFTER layout is complete
+    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CRITICAL FIX: Update scrollbar visibility AFTER layout is complete
     // This must be called here, after isUpdatingLayout has been reset
     updateScrollbarVisibility();
     
@@ -1449,6 +1480,19 @@ double MultiTrackContainer::getVisualScaleFactor() const
 
 void MultiTrackContainer::onTrackBPMChanged()
 {
+    // CRITICAL FIX: Force all tracks to repaint during playback
+    // This ensures visual updates are smooth when BPM changes in real-time
+    if (playing)
+    {
+        for (auto& track : tracks)
+        {
+            if (track)
+            {
+                track->repaint();
+            }
+        }
+    }
+    
     repaint();
 }
 
@@ -1747,7 +1791,7 @@ void MultiTrackContainer::drawGlobalGhostClip(juce::Graphics& g)
     }
     
     // Calculate scale factor based on target track's BPM
-    double targetScaleFactor = TimelineUtils::getVisualScaleFactor(targetTrackBPM);
+    double targetScaleFactor = globalGhostClip->referenceBPM / targetTrackBPM;
 
     // Calculate position and size
     float x = timeToPixels(globalGhostClip->startTime) - viewport.getViewPositionX() + TRACK_HEADER_WIDTH;
@@ -1772,20 +1816,11 @@ void MultiTrackContainer::timerCallback()
 {
     if (playing)
     {
-        double currentTime = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-        double deltaTime = currentTime - lastPlaybackTime;
-        lastPlaybackTime = currentTime;
-
-        playheadPosition += deltaTime;
-
-        // âœ… CRITICAL FIX: Use setPlayheadPosition instead of syncPlayheadPosition
-        processor.midiProcessor.setPlayheadPosition(playheadPosition);
+        playheadPosition = processor.midiProcessor.getPlayheadPosition();
 
         if (loopEnabled && selectionValid && playheadPosition >= selectionEnd)
         {
             playheadPosition = selectionStart;
-            lastPlaybackTime = currentTime;
-            processor.midiProcessor.setPlayheadPosition(selectionStart);
         }
 
         double maxTime = getMaxTime();
@@ -1793,6 +1828,11 @@ void MultiTrackContainer::timerCallback()
         {
             stop();
             return;
+        }
+
+        if (autoScrollEnabled)
+        {
+            updateAutoScroll();
         }
 
         repaint();
@@ -1804,16 +1844,34 @@ void MultiTrackContainer::updateAutoScroll()
     float playheadX = timeToPixels(playheadPosition);
     int viewportX = viewport.getViewPositionX();
     int viewportWidth = viewport.getWidth();
-
-    if (playheadX > (viewportX + viewportWidth * 0.9f))
+    
+    // Smooth scrolling: keep playhead at 70% of viewport when moving forward
+    float targetPlayheadPosition = viewportX + (viewportWidth * 0.7f);
+    
+    // Only scroll forward when playhead passes 70% mark
+    if (playheadX > targetPlayheadPosition)
     {
-        int newX = static_cast<int>(playheadX - viewportWidth * 0.5f);
+        // Smooth continuous scroll: move viewport to keep playhead at 70%
+        int newX = static_cast<int>(playheadX - (viewportWidth * 0.7f));
         viewport.setViewPosition(juce::jmax(0, newX), viewport.getViewPositionY());
+        
+        // CRITICAL FIX: Update ruler's viewport position so it scrolls with timeline
+        if (fixedRulerRow)
+        {
+            fixedRulerRow->setViewportX(juce::jmax(0, newX));
+        }
     }
-    else if (playheadX < (viewportX + viewportWidth * 0.1f) && viewportX > 0)
+    // Scroll backward when playhead goes before 30% (for reverse playback or manual seeking)
+    else if (playheadX < (viewportX + viewportWidth * 0.3f) && viewportX > 0)
     {
-        int newX = static_cast<int>(playheadX - viewportWidth * 0.5f);
+        int newX = static_cast<int>(playheadX - (viewportWidth * 0.3f));
         viewport.setViewPosition(juce::jmax(0, newX), viewport.getViewPositionY());
+        
+        // CRITICAL FIX: Update ruler's viewport position so it scrolls with timeline
+        if (fixedRulerRow)
+        {
+            fixedRulerRow->setViewportX(juce::jmax(0, newX));
+        }
     }
 }
 
@@ -1880,9 +1938,10 @@ juce::ValueTree MultiTrackContainer::saveGuiState() const
                 clip.setProperty("startTime", clipPtr->startTime, nullptr);
                 clip.setProperty("duration", clipPtr->duration, nullptr);
                 clip.setProperty("file", clipPtr->file.getFullPathName(), nullptr);
-                   clip.setProperty("originalBPM", clipPtr->originalBPM, nullptr);
-                   clip.setProperty("referenceBPM", clipPtr->referenceBPM, nullptr);
-                   clip.setProperty("id", clipPtr->id, nullptr);
+                clip.setProperty("originalBPM", clipPtr->originalBPM, nullptr);
+                clip.setProperty("referenceBPM", clipPtr->referenceBPM, nullptr);
+                clip.setProperty("sourceLibrary", static_cast<int>(clipPtr->sourceLibrary), nullptr);
+                clip.setProperty("id", clipPtr->id, nullptr);
                 clip.setProperty("colour", clipPtr->colour.toString(), nullptr);
                 clip.setProperty("name", clipPtr->name, nullptr);
                 clipsTree.appendChild(clip, nullptr);
@@ -1934,9 +1993,10 @@ void MultiTrackContainer::restoreGuiState(const juce::ValueTree& state)
                 mc.startTime = clipNode.getProperty("startTime", 0.0);
                 mc.duration = clipNode.getProperty("duration", 1.0);
                 mc.file = juce::File(clipNode.getProperty("file", "").toString());
-                   mc.originalBPM = clipNode.getProperty("originalBPM", 120.0);
-                   mc.referenceBPM = clipNode.getProperty("referenceBPM", 120.0);
-                   mc.id = clipNode.getProperty("id", juce::Uuid().toString()).toString();
+                mc.originalBPM = clipNode.getProperty("originalBPM", 120.0);
+                mc.referenceBPM = clipNode.getProperty("referenceBPM", 120.0);
+                mc.sourceLibrary = static_cast<DrumLibrary>(static_cast<int>(clipNode.getProperty("sourceLibrary", static_cast<int>(DrumLibrary::Unknown))));
+                mc.id = clipNode.getProperty("id", juce::Uuid().toString()).toString();
                 mc.colour = juce::Colour::fromString(clipNode.getProperty("colour", "ff000000").toString());
                 mc.name = clipNode.getProperty("name", "").toString();
                 tracks[idx]->addClip(mc);

@@ -226,7 +226,9 @@ void Timeline::mouseDown(const juce::MouseEvent& e)
     for (auto& clip : clips)
     {
         float clipX = timeToPixels(clip->startTime);
-        float clipWidth = static_cast<float>(clip->duration * zoomLevel * getVisualScaleFactor());
+        double trackBPM = getTrackBPM();
+        double visualScaleFactor = clip->referenceBPM / trackBPM;
+        float clipWidth = static_cast<float>(clip->duration * zoomLevel * visualScaleFactor);
         float clipEndX = clipX + clipWidth;
 
         if (clickX >= clipX && clickX <= clipEndX)
@@ -417,8 +419,10 @@ void Timeline::mouseDrag(const juce::MouseEvent& e)
 
         for (auto& clip : clips)
         {
-            float clipX = timeToPixels(clip->startTime);
-            float clipWidth = static_cast<float>(clip->duration * zoomLevel * getVisualScaleFactor());
+            float clipX = timeToPixels(clip->startTime);  
+            double trackBPM = getTrackBPM();
+            double visualScaleFactor = clip->referenceBPM / trackBPM;
+            float clipWidth = static_cast<float>(clip->duration * zoomLevel * visualScaleFactor);
             juce::Rectangle<float> clipBounds(clipX, RULER_HEIGHT + 10.0f, clipWidth, TRACK_HEIGHT - 20.0f);
 
             if (selectionBox.intersects(clipBounds))
@@ -514,7 +518,9 @@ void Timeline::mouseMove(const juce::MouseEvent& e)
     for (const auto& clip : clips)
     {
         float clipX = timeToPixels(clip->startTime);
-        float clipWidth = static_cast<float>(clip->duration * zoomLevel * getVisualScaleFactor());
+        double trackBPM = getTrackBPM();
+        double visualScaleFactor = clip->referenceBPM / trackBPM;
+        float clipWidth = static_cast<float>(clip->duration * zoomLevel * visualScaleFactor);
         float clipEndX = clipX + clipWidth;
 
         if (e.position.x >= clipX && e.position.x <= clipEndX)
@@ -748,23 +754,47 @@ void Timeline::itemDropped(const SourceDetails& details)
 // Playback methods
 void Timeline::play()
 {
-    // CRITICAL FIX: Clear all existing clips before adding new ones
+    // Clear all existing clips before adding new ones
     // This prevents stale clips from previous play sessions
     processor.midiProcessor.clearAllClips();
     
     // Get current track BPM for all clips
     double trackBPM = getTrackBPM();
     
-    // Add all clips with current track BPM
+    // Detect source library for each clip based on its file location
+    auto& library = processor.drumLibraryManager;
+    
+    // Add all clips with current track BPM and proper source library detection
     for (const auto& clip : clips)
     {
+        // Detect source library from file path
+        DrumLibrary sourceLib = DrumLibrary::Unknown;
+        
+        for (int i = 0; i < library.getNumRootFolders(); ++i)
+        {
+            auto rootFolder = library.getRootFolder(i);
+            if (clip->file.getFullPathName().startsWith(rootFolder.getFullPathName()))
+            {
+                sourceLib = library.getRootFolderSourceLibrary(i);
+                DBG("Clip " + clip->name + " detected source library: " + juce::String(static_cast<int>(sourceLib)));
+                break;
+            }
+        }
+        
+        // If no source library detected, file might be from external source or drag/drop
+        if (sourceLib == DrumLibrary::Unknown)
+        {
+            DBG("Clip " + clip->name + " using Unknown source library (external file)");
+        }
+        
         processor.midiProcessor.addMidiClip(
             clip->file, 
             clip->startTime, 
-            DrumLibrary::Unknown,
+            sourceLib, 
             clip->referenceBPM,
             trackBPM,
-            0  // Track number (0 for main timeline)
+            0,  // Track number (0 for main timeline)
+            clip->duration  // CRITICAL FIX: Pass explicit duration to ensure sync between visual and playback
         );
     }
 
@@ -1106,23 +1136,22 @@ void Timeline::timerCallback()
 {
     if (playing)
     {
-        double currentTime = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-        double deltaTime = currentTime - lastPlaybackTime;
-        lastPlaybackTime = currentTime;
-
-        playheadPosition += deltaTime;
-
-        // âœ… CRITICAL FIX: Use setPlayheadPosition instead of syncPlayheadPosition
-        // This ensures clips are repositioned correctly during playback
-        processor.midiProcessor.setPlayheadPosition(playheadPosition);
-
+        // âœ… CRITICAL FIX: ONLY read playhead position from audio processor
+        // DO NOT write it back! Audio thread is the single source of truth.
+        // Writing to playheadPosition from message thread causes data race and note skipping.
+        playheadPosition = processor.midiProcessor.getPlayheadPosition();
+        
+        // âŒ REMOVED: DO NOT call syncPlayheadPosition here!
+        // It writes to playheadPosition, causing data race with audio thread
+        
+        // Handle loop restart (this IS an intentional seek, so setPlayheadPosition is OK)
         if (loopEnabled && selectionValid && playheadPosition >= selectionEnd)
         {
             playheadPosition = selectionStart;
-            lastPlaybackTime = currentTime;
             processor.midiProcessor.setPlayheadPosition(selectionStart);
         }
 
+        // Handle reaching end
         double maxTime = getMaxTime();
         if (!loopEnabled && maxTime > 0 && playheadPosition >= maxTime)
         {
@@ -1130,6 +1159,7 @@ void Timeline::timerCallback()
             return;
         }
 
+        // Update UI
         if (autoScrollEnabled)
         {
             updateAutoScroll();
@@ -1286,10 +1316,13 @@ void Timeline::drawClips(juce::Graphics& g)
         // This ensures clips always appear at their correct time position
         float x = timeToPixels(clip->startTime);
         
-        // Calculate width: duration * zoom * BPM scale factor
-        // The BPM scale factor affects how long the clip appears visually,
-        // but NOT where it starts
-        float width = static_cast<float>(clip->duration * zoomLevel * getVisualScaleFactor());
+        // CRITICAL FIX: Calculate width using the SAME formula as MidiProcessor
+        // Visual scale = referenceBPM / trackBPM (NOT 120.0 / trackBPM)
+        // This ensures visual width matches playback duration exactly
+        double trackBPM = getTrackBPM();
+        double visualScaleFactor = clip->referenceBPM / trackBPM;
+        float width = static_cast<float>(clip->duration * zoomLevel * visualScaleFactor);
+        
         
         // Second visibility check: is the clip actually on screen in pixel space?
         // This catches edge cases where time-based check might be imprecise
@@ -1439,7 +1472,9 @@ void Timeline::drawGhostClip(juce::Graphics& g)
 
     // Use exact same coordinate calculation as drop indicator
     float x = timeToPixels(ghostClip->startTime);
-    float width = static_cast<float>(ghostClip->duration * zoomLevel * getVisualScaleFactor());
+    double trackBPM = getTrackBPM();
+    double visualScaleFactor = ghostClip->referenceBPM / trackBPM;
+    float width = static_cast<float>(ghostClip->duration * zoomLevel * visualScaleFactor);
 
     auto clipBounds = juce::Rectangle<float>(x, RULER_HEIGHT + 10.0f, width, TRACK_HEIGHT - 20.0f);
 
@@ -1553,7 +1588,9 @@ void Timeline::handleMidiFileDrop(const juce::StringArray& parts, double dropTim
     newClip.startTime = dropTime;
     newClip.colour = ColourPalette::primaryBlue.withAlpha(0.7f);
     
+    // Set referenceBPM to current track BPM when clip is dropped
     double trackBPM = getTrackBPM();
+    newClip.referenceBPM = trackBPM;  // Store the BPM at time of drop
     newClip.duration = 4.0 * (120.0 / trackBPM);
 
     newClip.file = juce::File(parts[1]);
@@ -1589,7 +1626,9 @@ void Timeline::handleDrumPartDrop(const juce::StringArray& parts, double dropTim
         newClip.file = tempFile;
         newClip.colour = MidiDissector::getColorForDrumNote(drumNote).withAlpha(0.7f);
         
+        // Set referenceBPM to current track BPM when clip is dropped
         double trackBPM = getTrackBPM();
+        newClip.referenceBPM = trackBPM;  // Store the BPM at time of drop
         newClip.duration = 1.0 * (120.0 / trackBPM);
 
         addClip(newClip);

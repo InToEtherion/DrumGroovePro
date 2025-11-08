@@ -55,7 +55,8 @@ void HeaderSection::setupComponents()
 
 void HeaderSection::paint(juce::Graphics& g)
 {
-    g.fillAll(ColourPalette::panelBackground);
+    // Make header section transparent - don't fill with any color
+    // Background image from MainComponent will show through;
 }
 
 void HeaderSection::resized()

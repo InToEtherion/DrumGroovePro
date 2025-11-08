@@ -12,6 +12,7 @@ struct MidiClip
     double startTime = 0.0;
     double duration = 4.0;
     double originalBPM = 120.0;
+    double referenceBPM = 120.0;  // ✅ ADDED: Track BPM when clip was added (CRITICAL FIX)
     juce::Colour colour;
     bool isSelected = false;
     juce::String id = juce::Uuid().toString();

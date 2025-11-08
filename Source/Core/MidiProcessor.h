@@ -8,13 +8,13 @@ struct MidiClipPlayback
     juce::String id;
     juce::MidiMessageSequence sequence;
     double startTime = 0.0;
-    double duration = 0.0;  // Duration in seconds at originalBPM
+    double duration = 0.0;
     double originalBPM = 120.0;
-    double referenceBPM = 120.0;  // Track BPM when clip was added
-    double targetBPM = 120.0;     // Current track BPM
+    double referenceBPM = 120.0;
+    double targetBPM = 120.0;
     int trackNumber = 0;
     int currentEventIndex = 0;
-    double unscaledLocalTime = 0.0;  // Track position in original MIDI time (unaffected by BPM)
+    double unscaledLocalTime = 0.0;
     bool isActive = false;
     DrumLibrary sourceLibrary = DrumLibrary::Unknown;
 };
@@ -30,15 +30,12 @@ public:
 
     void processBlock(juce::MidiBuffer& midiMessages, double currentBPM, DrumLibrary targetLibrary);
 
-    // Add a MIDI file to play with precise timing and BPM scaling
-    void addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib, double referenceBPM, double targetBPM, int trackNum);
+    void addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib, double referenceBPM, double targetBPM, int trackNum, const juce::String& clipId);
+	void addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib, double referenceBPM, double targetBPM, int trackNum, double explicitDuration, const juce::String& clipId);
     void clearAllClips();
     void clearClip(const juce::String& clipId);
     
-    // Update BPM for all clips on a specific track in real-time
     void updateTrackBPM(int trackNumber, double newBPM);
-    
-    // NEW: Update clip boundaries in real-time when user resizes/moves clips
     void updateClipBoundaries(const juce::String& clipId, double newStartTime, double newDuration);
 
     void play();
@@ -52,7 +49,8 @@ public:
     void setLoopEnabled(bool enabled) { loopEnabled = enabled; }
     void setLoopRange(double start, double end) { loopStart = start; loopEnd = end; }
 
-    void syncPlayheadPosition(double timeInSeconds);
+    void setPlaybackSpeed(double speed) { playbackSpeed = juce::jlimit(0.25, 2.0, speed); }
+    double getPlaybackSpeed() const { return playbackSpeed; }
 
 private:
     DrumLibraryManager& drumLibraryManager;
@@ -65,6 +63,7 @@ private:
     double loopStart = 0.0;
     double loopEnd = 4.0;
     double playheadPosition = 0.0;
+    double playbackSpeed = 1.0;
 
     std::vector<std::unique_ptr<MidiClipPlayback>> activeClips;
     juce::CriticalSection clipLock;

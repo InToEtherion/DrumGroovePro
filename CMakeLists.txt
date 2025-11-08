@@ -8,7 +8,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # Add JUCE - using relative path as requested (no hardcoded paths)
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../JUCE juce_build)
 
-# Add the plugin target - NOW WITH STANDALONE
+# Add the plugin target - VST3 ONLY (Standalone removed)
 juce_add_plugin(DrumGroovePro
     PRODUCT_NAME "DrumGroovePro"
     COMPANY_NAME "InToEtherion"
@@ -20,7 +20,7 @@ juce_add_plugin(DrumGroovePro
     COPY_PLUGIN_AFTER_BUILD TRUE
     PLUGIN_MANUFACTURER_CODE InTE
     PLUGIN_CODE Dgp1
-    FORMATS VST3 Standalone  # ADDED STANDALONE HERE
+    FORMATS VST3
     VST3_CATEGORIES "Fx" "Tools" "MIDI"
 )
 
@@ -184,111 +184,81 @@ set_target_properties(DrumGroovePro PROPERTIES
     ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
 )
 
-# Resource copying - Build directory first
+# FIXED: Define resource paths - using correct build path
+set(BUILD_VST3_RESOURCES "${CMAKE_BINARY_DIR}/lib/VST3/DrumGroovePro.vst3/Contents/Resources")
+set(SYSTEM_VST3_RESOURCES "$ENV{COMMONPROGRAMFILES}/VST3/DrumGroovePro.vst3/Contents/Resources")
+
+# FIXED: Resource copying - using correct target name DrumGroovePro_VST3
 add_custom_command(TARGET DrumGroovePro_VST3 POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo "Copying resources to build VST3 bundle..."
+    COMMAND ${CMAKE_COMMAND} -E echo "=== Copying resources to VST3 bundle ==="
     
     # Create directory structure in build folder
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${CMAKE_BINARY_DIR}/lib/VST3/DrumGroovePro.vst3/Contents/Resources/icons/folder/16x16"
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${CMAKE_BINARY_DIR}/lib/VST3/DrumGroovePro.vst3/Contents/Resources/icons/midi/16x16"
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${CMAKE_BINARY_DIR}/lib/VST3/DrumGroovePro.vst3/Contents/Resources/logo"
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "${CMAKE_BINARY_DIR}/lib/VST3/DrumGroovePro.vst3/Contents/Resources/background/"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_VST3_RESOURCES}/icons/folder/16x16"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_VST3_RESOURCES}/icons/midi/16x16"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_VST3_RESOURCES}/logo"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_VST3_RESOURCES}/background"
     
     # Copy icon files to build folder
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Resources/icons/folder/16x16/folder.png"
-        "${CMAKE_BINARY_DIR}/lib/VST3/DrumGroovePro.vst3/Contents/Resources/icons/folder/16x16/folder.png"
-        || ${CMAKE_COMMAND} -E echo "Warning: folder.png not found"
+        "${BUILD_VST3_RESOURCES}/icons/folder/16x16/folder.png"
         
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Resources/icons/midi/16x16/midi.png"
-        "${CMAKE_BINARY_DIR}/lib/VST3/DrumGroovePro.vst3/Contents/Resources/icons/midi/16x16/midi.png"
-        || ${CMAKE_COMMAND} -E echo "Warning: midi.png not found"
+        "${BUILD_VST3_RESOURCES}/icons/midi/16x16/midi.png"
     
     # Copy logo to build folder
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Resources/logo/logo.png"
-        "${CMAKE_BINARY_DIR}/lib/VST3/DrumGroovePro.vst3/Contents/Resources/logo/logo.png"
-        || ${CMAKE_COMMAND} -E echo "Warning: logo.png not found"
+        "${BUILD_VST3_RESOURCES}/logo/logo.png"
 
     # Copy background to build folder
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Resources/background/background.png"
-        "${CMAKE_BINARY_DIR}/lib/VST3/DrumGroovePro.vst3/Contents/Resources/background/background.png"
-        || ${CMAKE_COMMAND} -E echo "Warning: logo.png not found"
+        "${BUILD_VST3_RESOURCES}/background/background.png"
     
-    COMMENT "Resources copied to build directory"
+    COMMAND ${CMAKE_COMMAND} -E echo "=== Resources copied to build directory ==="
+    COMMAND ${CMAKE_COMMAND} -E echo "Build VST3 path: ${BUILD_VST3_RESOURCES}"
+    
+    COMMENT "Copying resources to build VST3 bundle"
     VERBATIM
 )
 
-# Final system installation with error handling
-add_custom_command(TARGET DrumGroovePro_VST3 POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo "Copying resources to system VST3 folder..."
-    
-    # Wait for JUCE installation to complete
-    COMMAND ${CMAKE_COMMAND} -E sleep 1
-    
-    # Create directories with proper error handling
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "C:/Program Files/Common Files/VST3/DrumGroovePro.vst3/Contents/Resources/icons/folder/16x16"
-        || ${CMAKE_COMMAND} -E echo "Note: Could not create system folders (may need admin rights)"
+# FIXED: System installation - using correct target name DrumGroovePro_VST3
+if(WIN32)
+    add_custom_command(TARGET DrumGroovePro_VST3 POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E echo "=== Copying resources to system VST3 folder ==="
         
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "C:/Program Files/Common Files/VST3/DrumGroovePro.vst3/Contents/Resources/icons/midi/16x16"
-        || ${CMAKE_COMMAND} -E echo "Note: Could not create system folders (may need admin rights)"
+        # Create directories in system folder
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_VST3_RESOURCES}/icons/folder/16x16" || ${CMAKE_COMMAND} -E true
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_VST3_RESOURCES}/icons/midi/16x16" || ${CMAKE_COMMAND} -E true
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_VST3_RESOURCES}/logo" || ${CMAKE_COMMAND} -E true
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_VST3_RESOURCES}/background" || ${CMAKE_COMMAND} -E true
         
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "C:/Program Files/Common Files/VST3/DrumGroovePro.vst3/Contents/Resources/logo"
-        || ${CMAKE_COMMAND} -E echo "Note: Could not create system folders (may need admin rights)"
+        # Copy files to system folder
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/Resources/icons/folder/16x16/folder.png"
+            "${SYSTEM_VST3_RESOURCES}/icons/folder/16x16/folder.png" || ${CMAKE_COMMAND} -E true
+            
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/Resources/icons/midi/16x16/midi.png"
+            "${SYSTEM_VST3_RESOURCES}/icons/midi/16x16/midi.png" || ${CMAKE_COMMAND} -E true
+            
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/Resources/logo/logo.png"
+            "${SYSTEM_VST3_RESOURCES}/logo/logo.png" || ${CMAKE_COMMAND} -E true
 
-    COMMAND ${CMAKE_COMMAND} -E make_directory
-        "C:/Program Files/Common Files/VST3/DrumGroovePro.vst3/Contents/Resources/background"
-        || ${CMAKE_COMMAND} -E echo "Note: Could not create system folders (may need admin rights)"
-    
-    # Copy files with error handling
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/Resources/icons/folder/16x16/folder.png"
-        "C:/Program Files/Common Files/VST3/DrumGroovePro.vst3/Contents/Resources/icons/folder/16x16/folder.png"
-        || ${CMAKE_COMMAND} -E echo "Note: Could not copy to system folder (resources will load from bundle)"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/Resources/background/background.png"
+            "${SYSTEM_VST3_RESOURCES}/background/background.png" || ${CMAKE_COMMAND} -E true
         
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/Resources/icons/midi/16x16/midi.png"
-        "C:/Program Files/Common Files/VST3/DrumGroovePro.vst3/Contents/Resources/icons/midi/16x16/midi.png"
-        || ${CMAKE_COMMAND} -E echo "Note: Could not copy to system folder (resources will load from bundle)"
+        COMMAND ${CMAKE_COMMAND} -E echo "=== Resources copied to system folder ==="
+        COMMAND ${CMAKE_COMMAND} -E echo "System VST3 path: ${SYSTEM_VST3_RESOURCES}"
         
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/Resources/logo/logo.png"
-        "C:/Program Files/Common Files/VST3/DrumGroovePro.vst3/Contents/Resources/logo/logo.png"
-        || ${CMAKE_COMMAND} -E echo "Note: Could not copy to system folder (resources will load from bundle)"
-
-    COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        "${CMAKE_SOURCE_DIR}/Resources/background/background.png"
-        "C:/Program Files/Common Files/VST3/DrumGroovePro.vst3/Contents/Resources/Resources/background/background.png"
-        || ${CMAKE_COMMAND} -E echo "Note: Could not copy to system folder (resources will load from bundle)"
-    
-    COMMENT "Resources copied to system VST3 folder"
-    VERBATIM
-)
-
-# Install resources to system VST3 folder
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/Resources/icons"
-        DESTINATION "C:/Program Files/Common Files/VST3/DrumGroovePro.vst3/Contents/Resources"
-        OPTIONAL
-        FILES_MATCHING PATTERN "*.png")
-
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/Resources/logo"
-        DESTINATION "C:/Program Files/Common Files/VST3/DrumGroovePro.vst3/Contents/Resources"
-        OPTIONAL
-        FILES_MATCHING PATTERN "*.png")
-
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/Resources/background"
-        DESTINATION "C:/Program Files/Common Files/VST3/DrumGroovePro.vst3/Contents/Resources"
-        OPTIONAL
-        FILES_MATCHING PATTERN "*.png")
+        COMMENT "Copying resources to system VST3 folder"
+        VERBATIM
+    )
+endif()
 
 # Print build configuration summary
 message(STATUS "DrumGroovePro Build Configuration:")
@@ -296,6 +266,7 @@ message(STATUS "  Build Type: ${CMAKE_BUILD_TYPE}")
 message(STATUS "  C++ Standard: ${CMAKE_CXX_STANDARD}")
 message(STATUS "  Compiler: ${CMAKE_CXX_COMPILER_ID}")
 message(STATUS "  OpenGL: Enabled for hardware acceleration")
-message(STATUS "  Targets: VST3 Plugin + Standalone Application")
+message(STATUS "  Targets: VST3 Plugin ONLY")
 message(STATUS "  DPI Aware: Yes")
 message(STATUS "  Hardware Acceleration: Yes (OpenGL + DirectX)")
+message(STATUS "  Resource Source: ${CMAKE_SOURCE_DIR}/Resources")

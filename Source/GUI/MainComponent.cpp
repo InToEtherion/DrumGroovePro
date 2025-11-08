@@ -14,7 +14,8 @@
 MainComponent::MainComponent(DrumGrooveProcessor& p)
 : processor(p)
 {
-    setOpaque(true);
+    // Don't setOpaque - we want to paint the background image
+    setOpaque(false);
 
     headerSection = std::make_unique<HeaderSection>(processor);
     folderPanel = std::make_unique<FolderPanel>(processor);
@@ -93,12 +94,33 @@ MainComponent::~MainComponent() = default;
 
 void MainComponent::paint(juce::Graphics& g)
 {
-    g.fillAll(ColourPalette::mainBackground);
+    // Fill with black background first
+    g.fillAll(juce::Colours::black);
+    
+    // Draw the background image centered if loaded
+    if (backgroundImage.isValid())
+    {
+        auto bounds = getLocalBounds();
+        int imageWidth = backgroundImage.getWidth();
+        int imageHeight = backgroundImage.getHeight();
+        
+        // Calculate centered position
+        int x = (bounds.getWidth() - imageWidth) / 2;
+        int y = (bounds.getHeight() - imageHeight) / 2;
+        
+        // Draw image centered - black will show on sides if GUI is larger
+        g.drawImageAt(backgroundImage, x, y);
+    }
+    else
+    {
+        // Fallback if image not loaded - use dark background
+        g.fillAll(ColourPalette::mainBackground);
+    }
 
     // Get title area bounds (first 50px)
     auto titleBounds = getLocalBounds().removeFromTop(50);
 
-    // Paint title "DrumGroovePro" centered
+    // Paint title "DrumGroovePro" centered on top of background
     auto& lnf = DrumGrooveLookAndFeel::getInstance();
 
     auto font = lnf.getTitleFont().withHeight(42.0f);
@@ -109,7 +131,6 @@ void MainComponent::paint(juce::Graphics& g)
     auto proWidth = juce::GlyphArrangement::getStringWidthInt(font, "Pro");
     auto totalWidth = drumGrooveWidth + proWidth;
     
-    // FIXED: Use titleBounds.getWidth() instead of getWidth() for proper centering
     auto startX = titleBounds.getX() + (titleBounds.getWidth() - totalWidth) / 2;
 
     // Center vertically in the 50px title area

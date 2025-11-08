@@ -8,11 +8,9 @@
 TimelineControls::TimelineControls(DrumGrooveProcessor& p, MultiTrackContainer& c)
 : processor(p), container(c)
 {
-    // Create TimelineManager
-    timelineManager = std::make_unique<TimelineManager>(&container);
+    timelineManager = std::make_unique<TimelineManager>(&container, processor);
     auto& lnf = DrumGrooveLookAndFeel::getInstance();
 
-    // File management buttons
     fileButton.setButtonText("File");
     fileButton.addListener(this);
     fileButton.setTooltip("File operations");
@@ -21,16 +19,15 @@ TimelineControls::TimelineControls(DrumGrooveProcessor& p, MultiTrackContainer& 
     addButton.setButtonText("+");
     addButton.addListener(this);
     addButton.setTooltip("Add new track");
-    addButton.setClickingTogglesState(false);  // Don't toggle, just click
+    addButton.setClickingTogglesState(false);
     addAndMakeVisible(addButton);
 
     removeButton.setButtonText("-");
     removeButton.addListener(this);
     removeButton.setTooltip("Remove selected track or clear clips");
-    removeButton.setClickingTogglesState(false);  // Don't toggle, just click
+    removeButton.setClickingTogglesState(false);
     addAndMakeVisible(removeButton);
 
-    // Transport buttons
     playButton.setButtonText("PLAY");
     playButton.addListener(this);
     playButton.setVisible(true);
@@ -45,13 +42,11 @@ TimelineControls::TimelineControls(DrumGrooveProcessor& p, MultiTrackContainer& 
     stopButton.addListener(this);
     addAndMakeVisible(stopButton);
 
-    // Loop button
     loopButton.setButtonText("LOOP");
     loopButton.addListener(this);
     loopButton.setTooltip("Click and drag on ruler to set selection range");
     addAndMakeVisible(loopButton);
 
-    // Time display
     timeDisplay.setText("00:00:00:000", juce::dontSendNotification);
     timeDisplay.setFont(lnf.getMonospaceFont().withHeight(15.0f));
     timeDisplay.setColour(juce::Label::textColourId, ColourPalette::primaryText);
@@ -59,7 +54,6 @@ TimelineControls::TimelineControls(DrumGrooveProcessor& p, MultiTrackContainer& 
     timeDisplay.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(timeDisplay);
 
-    // Loop/Selection time fields with EXACT original setup
     loopStartLabel.setText("Start:", juce::dontSendNotification);
     loopStartLabel.setFont(lnf.getSmallFont());
     loopStartLabel.setColour(juce::Label::textColourId, ColourPalette::primaryText);
@@ -71,8 +65,8 @@ TimelineControls::TimelineControls(DrumGrooveProcessor& p, MultiTrackContainer& 
     loopStartField.setColour(juce::TextEditor::textColourId, ColourPalette::primaryText);
     loopStartField.setColour(juce::TextEditor::outlineColourId, ColourPalette::borderColour);
     loopStartField.setJustification(juce::Justification::centred);
-    loopStartField.setInputRestrictions(12, "0123456789:");  // Input restrictions
-    loopStartField.onTextChange = [this]() { handleLoopStartChange(); };  // onTextChange
+    loopStartField.setInputRestrictions(12, "0123456789:");
+    loopStartField.onTextChange = [this]() { handleLoopStartChange(); };
     loopStartField.onFocusLost = [this]() { updateLoopTimeFields(); };
     addAndMakeVisible(loopStartField);
 
@@ -87,12 +81,25 @@ TimelineControls::TimelineControls(DrumGrooveProcessor& p, MultiTrackContainer& 
     loopEndField.setColour(juce::TextEditor::textColourId, ColourPalette::primaryText);
     loopEndField.setColour(juce::TextEditor::outlineColourId, ColourPalette::borderColour);
     loopEndField.setJustification(juce::Justification::centred);
-    loopEndField.setInputRestrictions(12, "0123456789:");  // Input restrictions
-    loopEndField.onTextChange = [this]() { handleLoopEndChange(); };  // onTextChange
+    loopEndField.setInputRestrictions(12, "0123456789:");
+    loopEndField.onTextChange = [this]() { handleLoopEndChange(); };
     loopEndField.onFocusLost = [this]() { updateLoopTimeFields(); };
     addAndMakeVisible(loopEndField);
 
-    // Zoom controls (KEPT!)
+    speedLabel.setText("Speed:", juce::dontSendNotification);
+    speedLabel.setFont(lnf.getSmallFont());
+    speedLabel.setColour(juce::Label::textColourId, ColourPalette::primaryText);
+    addAndMakeVisible(speedLabel);
+
+    speedSlider.setRange(25.0, 200.0, 1.0);
+    speedSlider.setValue(100.0);
+    speedSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    speedSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 50, 20);
+    speedSlider.setTextValueSuffix("%");
+    speedSlider.setTooltip("Playback speed: 100% = normal, lower = slower, higher = faster");
+    speedSlider.addListener(this);
+    addAndMakeVisible(speedSlider);
+
     zoomOutButton.setButtonText("-");
     zoomOutButton.addListener(this);
     addAndMakeVisible(zoomOutButton);
@@ -113,15 +120,12 @@ TimelineControls::TimelineControls(DrumGrooveProcessor& p, MultiTrackContainer& 
     fitButton.addListener(this);
     addAndMakeVisible(fitButton);
 
-    // Add container as change listener
     container.addChangeListener(this);
 
-    // Initialize states
     updateTransportButtons();
     updateLoopButton();
     updateLoopTimeFields();
 
-    // Start timer
     startTimer(50);
 }
 
@@ -135,11 +139,6 @@ void TimelineControls::paint(juce::Graphics& g)
 {
     g.fillAll(ColourPalette::panelBackground);
 
-    // Draw top border (optional, was in original)
-    // g.setColour(ColourPalette::borderColour);
-    // g.drawLine(0.0f, 0.0f, static_cast<float>(getWidth()), 0.0f, 1.0f);
-
-    // Draw separator between file buttons and transport buttons
     float separatorX = static_cast<float>(FILE_BUTTONS_WIDTH + LEFT_MARGIN - 5);
     g.setColour(ColourPalette::separator);
     g.fillRect(separatorX, 5.0f, static_cast<float>(SEPARATOR_WIDTH), static_cast<float>(getHeight() - 10));
@@ -149,7 +148,6 @@ void TimelineControls::resized()
 {
     auto bounds = getLocalBounds().reduced(5);
 
-    // File management buttons on the left
     auto fileButtonsArea = bounds.removeFromLeft(FILE_BUTTONS_WIDTH);
     fileButton.setBounds(fileButtonsArea.removeFromLeft(80).reduced(2));
     fileButtonsArea.removeFromLeft(3);
@@ -157,11 +155,8 @@ void TimelineControls::resized()
     fileButtonsArea.removeFromLeft(3);
     removeButton.setBounds(fileButtonsArea.removeFromLeft(40).reduced(2));
 
-    // Add space for separator + alignment with ruler
     bounds.removeFromLeft(LEFT_MARGIN);
 
-    // Transport controls (PLAY, PAUSE, STOP, LOOP)
-    // But now starting from after the File buttons
     playButton.setBounds(bounds.removeFromLeft(60));
     pauseButton.setBounds(playButton.getBounds());
     bounds.removeFromLeft(5);
@@ -169,11 +164,9 @@ void TimelineControls::resized()
     bounds.removeFromLeft(5);
     loopButton.setBounds(bounds.removeFromLeft(60));
 
-    // Time display
     bounds.removeFromLeft(10);
     timeDisplay.setBounds(bounds.removeFromLeft(110));
 
-    // Selection time fields (Start and End)
     bounds.removeFromLeft(15);
     auto loopFieldArea = bounds.removeFromLeft(280);
     loopStartLabel.setBounds(loopFieldArea.removeFromLeft(35));
@@ -182,7 +175,11 @@ void TimelineControls::resized()
     loopEndLabel.setBounds(loopFieldArea.removeFromLeft(30));
     loopEndField.setBounds(loopFieldArea.removeFromLeft(95).withHeight(22));
 
-    // Zoom controls on far right (KEPT!)
+    bounds.removeFromLeft(15);
+    auto speedArea = bounds.removeFromLeft(150);
+    speedLabel.setBounds(speedArea.removeFromLeft(45));
+    speedSlider.setBounds(speedArea);
+
     auto zoomArea = bounds.removeFromRight(230);
     fitButton.setBounds(zoomArea.removeFromRight(40));
     zoomArea.removeFromRight(5);
@@ -193,7 +190,6 @@ void TimelineControls::resized()
 
 void TimelineControls::buttonClicked(juce::Button* button)
 {
-    // File button handlers
     if (button == &fileButton)
     {
         showFileMenu();
@@ -206,7 +202,6 @@ void TimelineControls::buttonClicked(juce::Button* button)
     {
         onRemoveFile();
     }
-    // Transport button handlers
     else if (button == &playButton)
     {
         container.play();
@@ -227,7 +222,6 @@ void TimelineControls::buttonClicked(juce::Button* button)
         container.toggleLoop();
         updateLoopButton();
     }
-    // Zoom button handlers (KEPT!)
     else if (button == &zoomInButton)
     {
         zoomSlider.setValue(zoomSlider.getValue() * 1.2);
@@ -250,6 +244,12 @@ void TimelineControls::sliderValueChanged(juce::Slider* slider)
         container.setZoom(static_cast<float>(slider->getValue()));
         updateZoomDisplay();
     }
+    else if (slider == &speedSlider)
+    {
+        double speedPercent = slider->getValue();
+        double speedMultiplier = speedPercent / 100.0;
+        container.setPlaybackSpeed(speedMultiplier);
+    }
 }
 
 void TimelineControls::changeListenerCallback(juce::ChangeBroadcaster* source)
@@ -260,15 +260,14 @@ void TimelineControls::changeListenerCallback(juce::ChangeBroadcaster* source)
     }
 }
 
-// Timer callback (KEPT!)
 void TimelineControls::timerCallback()
 {
     updateTimeDisplay();
     updateLoopButton();
     updateLoopTimeFields();
+    updateTransportButtons(); 
 }
 
-// Update methods (ALL KEPT!)
 void TimelineControls::updateTimeDisplay()
 {
     double time = container.getPlayheadPosition();
@@ -277,7 +276,6 @@ void TimelineControls::updateTimeDisplay()
 
 void TimelineControls::updateZoomDisplay()
 {
-    // Zoom display is handled by the slider's text box
 }
 
 void TimelineControls::updateTransportButtons()
@@ -291,7 +289,6 @@ void TimelineControls::updateLoopButton()
 {
     bool loopEnabled = container.isLoopEnabled();
 
-    // Color change behavior (KEPT!)
     if (loopEnabled)
     {
         loopButton.setColour(juce::TextButton::buttonColourId, ColourPalette::primaryBlue);
@@ -306,7 +303,6 @@ void TimelineControls::updateLoopButton()
 
 void TimelineControls::updateLoopTimeFields()
 {
-    // Update fields if they don't have focus (KEPT!)
     if (!loopStartField.hasKeyboardFocus(true))
     {
         if (container.hasSelection())
@@ -336,158 +332,135 @@ void TimelineControls::updateLoopTimeFields()
 
 void TimelineControls::setLoopStartTime(double timeInSeconds)
 {
-    // TODO: Implement loop start time setting
-    // This will update the loop start field and container selection
-    // when user creates selection on timeline ruler
-    
-    // For now, just update the field text
     loopStartField.setText(formatTime(timeInSeconds), juce::dontSendNotification);
 }
 
 void TimelineControls::setLoopEndTime(double timeInSeconds)
 {
-    // TODO: Implement loop end time setting
-    // This will update the loop end field and container selection
-    // when user creates selection on timeline ruler
-    
-    // For now, just update the field text
     loopEndField.setText(formatTime(timeInSeconds), juce::dontSendNotification);
 }
 
 void TimelineControls::handleLoopStartChange()
 {
-    auto timeStr = loopStartField.getText();
-    if (isValidTimeFormat(timeStr))
+    juce::String text = loopStartField.getText();
+    
+    if (!isValidTimeFormat(text))
+        return;
+    
+    double time = parseTime(text);
+    
+    if (time >= 0.0)
     {
-        double time = parseTime(timeStr);
-        if (time >= 0.0)
-        {
-            container.setSelectionStart(time);
-        }
+        container.setSelectionStart(time);
     }
 }
 
 void TimelineControls::handleLoopEndChange()
 {
-    auto timeStr = loopEndField.getText();
-    if (isValidTimeFormat(timeStr))
+    juce::String text = loopEndField.getText();
+    
+    if (!isValidTimeFormat(text))
+        return;
+    
+    double time = parseTime(text);
+    
+    if (time >= 0.0)
     {
-        double time = parseTime(timeStr);
-        if (time > container.getSelectionStart())
-        {
-            container.setSelectionEnd(time);
-        }
+        container.setSelectionEnd(time);
     }
 }
 
-// Export submenu
-void TimelineControls::showExportMenu()
-{
-    juce::PopupMenu menu;
-    
-    menu.addItem(1, "Export as Single MIDI File");
-    menu.addItem(2, "Export as Separate MIDI Files (One per Track)");
-    
-    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&fileButton),
-        [this](int result) {
-            if (!timelineManager) return;
-            
-            switch (result)
-            {
-                case 1:
-                    timelineManager->exportTimelineAsMidi();
-                    break;
-                case 2:
-                    timelineManager->exportTimelineAsSeparateMidis();
-                    break;
-            }
-        });
-}
-
-// File button handlers
 void TimelineControls::showFileMenu()
 {
     juce::PopupMenu menu;
-
     menu.addItem(1, "Save Timeline State");
     menu.addItem(2, "Load Timeline State");
     menu.addSeparator();
-    menu.addItem(3, "Clear All Tracks");  // Changed from 4 to 3
+    menu.addItem(3, "Export as MIDI");
+    menu.addItem(4, "Export Tracks as Separate MIDIs");
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&fileButton),
-        [this](int result) {
-            switch (result)
-            {
-                case 1:
-                    if (timelineManager)
-                        timelineManager->saveTimelineState();
-                    break;
-                case 2:
-                    if (timelineManager)
-                        timelineManager->loadTimelineState();
-                    break;
-                case 3:  // Changed from case 4 to case 3
-                    container.clearAllTracks();
-                    break;
-            }
+        [this](int result)
+        {
+            if (result == 1)
+                timelineManager->saveTimelineState();
+            else if (result == 2)
+                timelineManager->loadTimelineState();
+            else if (result == 3)
+                showExportMenu();
+            else if (result == 4)
+                timelineManager->exportTimelineAsSeparateMidis();
+        });
+}
+
+void TimelineControls::showExportMenu()
+{
+    juce::PopupMenu menu;
+    menu.addItem(1, "Export Full Timeline");
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&fileButton),
+        [this](int result)
+        {
+            if (result == 1)
+                timelineManager->exportTimelineAsMidi();
         });
 }
 
 void TimelineControls::onAddFile()
 {
-    // Add a new track to the timeline
     container.addTrack();
 }
 
 void TimelineControls::onRemoveFile()
 {
-    // Get the selected track index
     int selectedTrack = container.getSelectedTrackIndex();
     
     if (selectedTrack >= 0)
     {
-        // Remove the selected track (or clear it if it's one of the first 3)
         container.removeTrack(selectedTrack);
-    }
-    else
-    {
-        // No track selected, delete selected clips instead
-        container.deleteSelectedClips();
     }
 }
 
-// Time formatting utilities (KEPT EXACTLY!)
 juce::String TimelineControls::formatTime(double seconds)
 {
-    int hours = static_cast<int>(seconds) / 3600;
-    int mins = (static_cast<int>(seconds) % 3600) / 60;
-    int secs = static_cast<int>(seconds) % 60;
-    int millis = static_cast<int>((seconds - static_cast<int>(seconds)) * 1000);
+    int totalMilliseconds = static_cast<int>(seconds * 1000.0);
+    int hours = totalMilliseconds / 3600000;
+    int minutes = (totalMilliseconds % 3600000) / 60000;
+    int secs = (totalMilliseconds % 60000) / 1000;
+    int millis = totalMilliseconds % 1000;
 
-    return juce::String::formatted("%02d:%02d:%02d:%03d", hours, mins, secs, millis);
+    return juce::String::formatted("%02d:%02d:%02d:%03d", hours, minutes, secs, millis);
 }
 
 double TimelineControls::parseTime(const juce::String& timeStr)
 {
-    auto parts = juce::StringArray::fromTokens(timeStr, ":", "");
-    if (parts.size() >= 4)
-    {
-        int hours = parts[0].getIntValue();
-        int mins = parts[1].getIntValue();
-        int secs = parts[2].getIntValue();
-        int millis = parts[3].getIntValue();
+    juce::StringArray parts;
+    parts.addTokens(timeStr, ":", "");
 
-        return hours * 3600.0 + mins * 60.0 + secs + millis / 1000.0;
-    }
-    return 0.0;
+    if (parts.size() != 4)
+        return 0.0;
+
+    int hours = parts[0].getIntValue();
+    int minutes = parts[1].getIntValue();
+    int seconds = parts[2].getIntValue();
+    int milliseconds = parts[3].getIntValue();
+
+    return hours * 3600.0 + minutes * 60.0 + seconds + milliseconds / 1000.0;
 }
 
 bool TimelineControls::isValidTimeFormat(const juce::String& timeStr)
 {
-    auto parts = juce::StringArray::fromTokens(timeStr, ":", "");
-    return parts.size() == 4 &&
-           parts[0].containsOnly("0123456789") &&
-           parts[1].containsOnly("0123456789") &&
-           parts[2].containsOnly("0123456789") &&
-           parts[3].containsOnly("0123456789");
+    juce::StringArray parts;
+    parts.addTokens(timeStr, ":", "");
+
+    if (parts.size() != 4)
+        return false;
+
+    for (const auto& part : parts)
+    {
+        if (!part.containsOnly("0123456789"))
+            return false;
+    }
+
+    return true;
 }

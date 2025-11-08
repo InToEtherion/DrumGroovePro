@@ -6,9 +6,11 @@
 DrumPartsColumn::DrumPartsColumn(DrumGrooveProcessor& p, const juce::String& columnName)
     : processor(p), columnTitle(columnName), selectedRow(-1)
 {
+    setOpaque(false);  
     setModel(this);
-    setRowHeight(50); // INCREASED from 45 for note mapping display
-    setColour(juce::ListBox::backgroundColourId, ColourPalette::mainBackground);
+    setRowHeight(50);
+    
+    setColour(juce::ListBox::backgroundColourId, ColourPalette::mainBackground.withAlpha(0.8f));
     setMultipleSelectionEnabled(false);
 }
 
@@ -40,7 +42,7 @@ void DrumPartsColumn::paintListBoxItem(int rowNumber, juce::Graphics& g,
 void DrumPartsColumn::drawPartItem(juce::Graphics& g, const DrumPart& part,
                                    juce::Rectangle<int> bounds, bool isSelected, int rowNumber)
 {
-    // Background
+    // Background with 0.8f transparency for MIDI dissection
     if (isSelected)
     {
         g.fillAll(part.colour.withAlpha(0.3f));
@@ -48,7 +50,8 @@ void DrumPartsColumn::drawPartItem(juce::Graphics& g, const DrumPart& part,
     }
     else
     {
-        g.fillAll(ColourPalette::mainBackground);
+        // Use 0.8f alpha for non-selected items
+        g.fillAll(ColourPalette::mainBackground.withAlpha(0.8f));
         g.setColour(ColourPalette::secondaryText);
 
         if (isMouseOver())
@@ -57,7 +60,8 @@ void DrumPartsColumn::drawPartItem(juce::Graphics& g, const DrumPart& part,
             auto itemBounds = getRowPosition(rowNumber, true);
             if (itemBounds.contains(mousePos))
             {
-                g.fillAll(ColourPalette::secondaryBackground);
+                // Hover state with 0.8f alpha
+                g.fillAll(ColourPalette::secondaryBackground.withAlpha(0.8f));
                 g.setColour(ColourPalette::primaryText);
             }
         }
@@ -389,7 +393,7 @@ void DrumPartsColumn::playPart(const DrumPart& part)
         }
 
         DrumLibrary targetLib = processor.getTargetLibrary();
-        processor.midiProcessor.addMidiClip(tempFile, 0.0, targetLib, bpm, bpm, 0);  // Track 0
+        processor.midiProcessor.addMidiClip(tempFile, 0.0, targetLib, bpm, bpm, 0, 10.0, "drumpart_preview_" + juce::Uuid().toString());  // Track 0
         processor.midiProcessor.setPlayheadPosition(0.0);
         processor.midiProcessor.play();
 

@@ -1,13 +1,10 @@
-// TimelineManager.cpp - COMPLETE FIX including temp file handling
-// This version correctly saves and restores temporary MIDI files
-
 #include "TimelineManager.h"
 #include "MultiTrackContainer.h"
 #include <fstream>
 
 //==============================================================================
-TimelineManager::TimelineManager(MultiTrackContainer* container)
-    : container(container)
+TimelineManager::TimelineManager(MultiTrackContainer* container, DrumGrooveProcessor& proc)
+    : container(container), processor(proc)
 {
 }
 
@@ -21,7 +18,21 @@ TimelineManager::~TimelineManager()
         DBG("TimelineManager: Cleaned up temp drag file on destruction");
     }
 }
+//==============================================================================
+double TimelineManager::getHeaderBPM() const
+{
+    // Get the header BPM (same logic as GrooveBrowser)
+    bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
+    return syncToHost ? processor.getHostBPM() 
+                      : processor.parameters.getRawParameterValue("manualBPM")->load();
+}
 
+//==============================================================================
+DrumLibrary TimelineManager::getTargetLibrary() const
+{
+    // Get the current target drum library from the plugin's parameters/manager
+    return processor.drumLibraryManager.getLastSelectedTargetLibrary();
+}
 
 //==============================================================================
 void TimelineManager::saveTimelineState()
@@ -29,14 +40,14 @@ void TimelineManager::saveTimelineState()
     auto targetFolder = chooseSaveLocation();
     if (targetFolder == juce::File{}) return;
 
-    // âœ… CRITICAL FIX: Check if folder is not empty and confirm deletion
+    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CRITICAL FIX: Check if folder is not empty and confirm deletion
     if (!confirmOverwriteFolder(targetFolder))
     {
         DBG("User cancelled save due to non-empty folder");
         return;
     }
 
-    // âœ… CRITICAL FIX: Clear folder contents if not empty
+    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CRITICAL FIX: Clear folder contents if not empty
     if (!isFolderEmpty(targetFolder))
     {
         if (!clearFolderContents(targetFolder))
@@ -123,79 +134,67 @@ void TimelineManager::loadTimelineState()
 //==============================================================================
 void TimelineManager::exportTimelineAsMidi()
 {
-    // âœ… CRITICAL FIX: Force GUI refresh before export
+    // Force GUI refresh before export
     container->repaint();
     juce::MessageManager::getInstance()->runDispatchLoopUntil(10);
     
     auto saveFile = chooseExportLocation(true);
     if (saveFile == juce::File{}) return;
 
-    // Check for overlaps BEFORE creating combined MIDI
-    std::vector<ClipBoundary> allClipBoundaries;
+
+    double headerBPM = getHeaderBPM();
     
-    // âœ… Log what's being exported
-    DBG("=== Starting Combined MIDI Export ===");
-    
+    // Log what's being exported
     for (int trackIdx = 0; trackIdx < container->getNumTracks(); ++trackIdx)
     {
         double trackBPM = container->getTrackBPM(trackIdx);
         auto clips = container->getTrackClips(trackIdx);
         
-        DBG("Track " + juce::String(trackIdx + 1) + " (BPM=" + juce::String(trackBPM, 2) + 
+        DBG("Track " + juce::String(trackIdx) + " (BPM: " + juce::String(trackBPM, 2) + 
             ") has " + juce::String(clips.size()) + " clips");
         
         for (const auto* clip : clips)
         {
-            if (!clip || !clip->file.existsAsFile())
-                continue;
-            
-            DBG("  - " + clip->name + " at " + juce::String(clip->startTime, 3) + "s");
-            
-            ClipBoundary boundary;
-            boundary.startTime = clip->startTime;
-            
-            double visualScaleFactor = clip->referenceBPM / trackBPM;
-            double visualDuration = clip->duration * visualScaleFactor;
-            boundary.endTime = clip->startTime + visualDuration;
-            
-            boundary.bpm = trackBPM;
-            boundary.trackIndex = trackIdx;
-            boundary.clip = clip;
-            
-            allClipBoundaries.push_back(boundary);
+            if (clip && clip->file.existsAsFile())
+            {
+                DBG("  Clip: " + clip->file.getFileName());
+            }
         }
     }
     
-    // Check for overlaps with different BPMs
-    juce::String errorMessage;
-    if (checkForOverlapsWithDifferentBPM(allClipBoundaries, errorMessage))
-    {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::WarningIcon,
-            "Export Error",
-            errorMessage,
-            "OK"
-        );
-        return;  // Return WITHOUT creating the file
-    }
-    
-    // Only create the MIDI file if there are no errors
+    // Create the combined MIDI file (clips can now overlap freely)
     auto midiFile = createCombinedMidiFile();
     
-    // Ensure MIDI file format 1 for multi-track with tempo
     if (midiFile.getNumTracks() > 0)
     {
-        DBG("Writing MIDI file with " + juce::String(midiFile.getNumTracks()) + " tracks");
-        DBG("MIDI file format: " + juce::String(midiFile.getTimeFormat()) + " ticks per quarter note");
+        DBG("Combined MIDI file created with " + juce::String(midiFile.getNumTracks()) + " tracks");
+    }
+    
+    // CRITICAL FIX: Delete existing file first to ensure overwrite works
+    if (saveFile.existsAsFile())
+    {
+        if (!saveFile.deleteFile())
+        {
+            juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                "Export Error", 
+                "Could not overwrite existing file. Please delete it manually and try again.", 
+                "OK");
+            return;
+        }
     }
     
     juce::FileOutputStream stream(saveFile);
     if (stream.openedOk())
     {
         midiFile.writeTo(stream);
-        stream.flush();  // Ensure all data is written
+        stream.flush();
+        
+        DBG("MIDI file exported successfully to: " + saveFile.getFullPathName());
+        
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::InfoIcon,
-            "Export Complete", "Timeline exported as single MIDI file", "OK");
+            "Export Complete", 
+            "MIDI file exported successfully", 
+            "OK");
     }
     else
     {
@@ -250,9 +249,9 @@ void TimelineManager::exportTimelineAsSeparateMidis()
         "Export Options",
         "Would you like to trim silence from the beginning of each track?\n\n"
         "Select 'No' to preserve the exact timeline positions.",
-        "No, keep silence", "Yes, trim");
+        "Yes, trim", "No, keep silence");
 
-    // âœ… CRITICAL FIX: Log which clips are being exported for debugging
+    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CRITICAL FIX: Log which clips are being exported for debugging
     DBG("=== Starting MIDI Export ===");
     for (int i = 0; i < container->getNumTracks(); ++i)
     {
@@ -484,16 +483,15 @@ void TimelineManager::restoreTimelineMetadata(const juce::ValueTree& state, cons
 }
 
 //==============================================================================
-// FIXED: Complete implementation for per-track MIDI export
+
 juce::MidiFile TimelineManager::createMidiFileForTrack(int trackIndex, bool includeSilence) const
 {
     juce::MidiFile midiFile;
-    midiFile.setTicksPerQuarterNote(960);
     
     auto clips = container->getTrackClips(trackIndex);
-    
     if (clips.empty())
     {
+        midiFile.setTicksPerQuarterNote(960);
         juce::MidiMessageSequence emptySequence;
         midiFile.addTrack(emptySequence);
         return midiFile;
@@ -506,25 +504,45 @@ juce::MidiFile TimelineManager::createMidiFileForTrack(int trackIndex, bool incl
             return a->startTime < b->startTime;
         });
     
+    // Get TPQN from the first clip to preserve original timing resolution
+    int outputTPQN = 960;  // Default
+    juce::MidiFile firstClipFile;
+    juce::FileInputStream firstStream(sortedClips[0]->file);
+    if (firstStream.openedOk() && firstClipFile.readFrom(firstStream))
+    {
+        outputTPQN = firstClipFile.getTimeFormat();
+        if (outputTPQN <= 0) outputTPQN = 960;
+    }
+    
+    midiFile.setTicksPerQuarterNote(outputTPQN);
+    
+    // Calculate offset for trimming silence if needed
     double startOffset = includeSilence ? 0.0 : sortedClips[0]->startTime;
     double trackBPM = container->getTrackBPM(trackIndex);
+    double headerBPM = getHeaderBPM();
+    DrumLibrary targetLibrary = getTargetLibrary();  // NEW: Get target library for remapping
     
-    DBG("=== Exporting Track " + juce::String(trackIndex + 1) + " ===");
+    DBG("=== Exporting Track " + juce::String(trackIndex + 1) + " (Same Logic as Combined Export) ===");
     DBG("Track BPM: " + juce::String(trackBPM, 2));
+    DBG("Header BPM: " + juce::String(headerBPM, 2));
+    DBG("Target Library: " + DrumLibraryManager::getLibraryName(targetLibrary));  // NEW: Log target library
+    DBG("Output TPQN: " + juce::String(outputTPQN));
     DBG("Start offset: " + juce::String(startOffset, 6));
     DBG("Include silence: " + juce::String(includeSilence ? "YES" : "NO"));
     if (!sortedClips.empty())
     {
         DBG("First clip starts at: " + juce::String(sortedClips[0]->startTime, 6) + "s");
-        DBG("Last clip ends at: " + juce::String(sortedClips.back()->startTime + sortedClips.back()->duration, 6) + "s");
+        if (sortedClips.size() > 1)
+        {
+            DBG("Last clip starts at: " + juce::String(sortedClips.back()->startTime, 6) + "s");
+        }
     }
     
     // Create the MIDI sequence
     juce::MidiMessageSequence trackSequence;
     
-    // CRITICAL FIX: Set tempo at tick 0 with proper format
-    // Tempo must be the FIRST event in the sequence for DAWs to recognize it
-    int microsecondsPerQuarterNote = static_cast<int>(60000000.0 / trackBPM);
+    // Set tempo at tick 0 using HEADER BPM (reference BPM for the MIDI file)
+    int microsecondsPerQuarterNote = static_cast<int>(60000000.0 / headerBPM);
     auto tempoMsg = juce::MidiMessage::tempoMetaEvent(microsecondsPerQuarterNote);
     trackSequence.addEvent(tempoMsg, 0.0);
     
@@ -532,10 +550,9 @@ juce::MidiFile TimelineManager::createMidiFileForTrack(int trackIndex, bool incl
     auto timeSigMsg = juce::MidiMessage::timeSignatureMetaEvent(4, 4);
     trackSequence.addEvent(timeSigMsg, 0.0);
     
-    DBG("Added tempo: " + juce::String(trackBPM, 2) + " BPM (microseconds: " + 
-        juce::String(microsecondsPerQuarterNote) + ") at tick 0");
+    DBG("Added tempo: " + juce::String(headerBPM, 2) + " BPM (header BPM as reference)");
     
-    // Process each clip
+    // Process each clip using EXACT same logic as createCombinedMidiFile
     for (const auto* clip : sortedClips)
     {
         if (!clip->file.existsAsFile())
@@ -544,10 +561,20 @@ juce::MidiFile TimelineManager::createMidiFileForTrack(int trackIndex, bool incl
         juce::MidiFile clipMidiFile;
         juce::FileInputStream stream(clip->file);
         if (!stream.openedOk() || !clipMidiFile.readFrom(stream))
+        {
+            DBG("ERROR: Could not read clip: " + clip->name);
             continue;
+        }
         
-        // Get clip's original BPM from tempo events
-        double clipOriginalBPM = 120.0;
+        // Use the stored originalBPM from the clip
+        double clipOriginalBPM = clip->originalBPM;
+        
+        // Get input TPQN
+        double ticksPerQuarterNote = clipMidiFile.getTimeFormat();
+        if (ticksPerQuarterNote <= 0) ticksPerQuarterNote = 960.0;
+        
+        // Calculate actual MIDI file duration to properly filter events
+        double maxEventTimeInTicks = 0.0;
         for (int t = 0; t < clipMidiFile.getNumTracks(); ++t)
         {
             const auto* track = clipMidiFile.getTrack(t);
@@ -556,29 +583,53 @@ juce::MidiFile TimelineManager::createMidiFileForTrack(int trackIndex, bool incl
             for (int e = 0; e < track->getNumEvents(); ++e)
             {
                 const auto* event = track->getEventPointer(e);
-                if (event && event->message.isTempoMetaEvent())
+                if (!event) continue;
+                
+                // Skip meta events when finding max timestamp
+                if (!event->message.isMetaEvent() || event->message.isEndOfTrackMetaEvent())
                 {
-                    clipOriginalBPM = 60.0 / event->message.getTempoSecondsPerQuarterNote();
-                    DBG("Found clip original BPM: " + juce::String(clipOriginalBPM, 2));
-                    break;
+                    maxEventTimeInTicks = juce::jmax(maxEventTimeInTicks, event->message.getTimeStamp());
                 }
             }
-            if (clipOriginalBPM != 120.0) break;
         }
         
-        // Calculate where this clip starts in the export
-        double clipStartInTimeline = clip->startTime;
-        double exportClipStartTime = clipStartInTimeline - startOffset;
+        double actualMidiDurationSeconds = (maxEventTimeInTicks / ticksPerQuarterNote) * (60.0 / clipOriginalBPM);
         
-        DBG("Clip: " + clip->name);
-        DBG("  Original BPM: " + juce::String(clipOriginalBPM, 2));
-        DBG("  Timeline position: " + juce::String(clipStartInTimeline, 6) + "s");
-        DBG("  Export position: " + juce::String(exportClipStartTime, 6) + "s");
-        DBG("  Duration: " + juce::String(clip->duration, 6) + "s");
+        DBG("Processing clip: " + clip->name);
+        DBG("  === CLIP PROPERTIES ===");
+        DBG("  Stored clip->originalBPM: " + juce::String(clipOriginalBPM, 6));
+        DBG("  Track BPM: " + juce::String(trackBPM, 2));
+        DBG("  Header BPM (export): " + juce::String(headerBPM, 2));
+        DBG("  === TIMING INFO ===");
+        DBG("  Timeline position (clip->startTime): " + juce::String(clip->startTime, 6) + "s");
+        DBG("  Stored clip duration: " + juce::String(clip->duration, 6) + "s");
+        DBG("  === MIDI FILE ANALYSIS ===");
+        DBG("  MIDI ticks per quarter note: " + juce::String(ticksPerQuarterNote, 2));
+        DBG("  Max event timestamp in file: " + juce::String(maxEventTimeInTicks, 2) + " ticks");
+        DBG("  Calculated MIDI duration (at originalBPM): " + juce::String(actualMidiDurationSeconds, 6) + "s");
+        
+        // CRITICAL: Use same tempo scaling as createCombinedMidiFile
+        double tempoScale = clipOriginalBPM / trackBPM;
+        
+        // Calculate clip start position - apply offset for trimming
+        double clipStartInExport = clip->startTime - startOffset;
+        double clipStartTicks = clipStartInExport * (headerBPM / 60.0) * outputTPQN;
+        
+        DBG("  === TEMPO SCALING INFO ===");
+        DBG("    Tempo scale factor: " + juce::String(tempoScale, 6) + " (originalBPM / trackBPM)");
+        DBG("    Clip start in export: " + juce::String(clipStartInExport, 6) + "s");
+        DBG("    Clip start in ticks: " + juce::String(clipStartTicks, 2));
+        
+        // TPQN conversion factor
+        double tpqnConversionFactor = static_cast<double>(outputTPQN) / ticksPerQuarterNote;
+        DBG("    TPQN conversion factor: " + juce::String(tpqnConversionFactor, 6));
         
         int eventCount = 0;
+        bool firstEventLogged = false;
+        double lastEventTicks = 0.0;
+        double lastEventExportTicks = 0.0;
         
-        // Process all MIDI events
+        // Process all MIDI events from all tracks in the clip
         for (int t = 0; t < clipMidiFile.getNumTracks(); ++t)
         {
             const auto* track = clipMidiFile.getTrack(t);
@@ -591,119 +642,144 @@ juce::MidiFile TimelineManager::createMidiFileForTrack(int trackIndex, bool incl
                 
                 auto message = event->message;
                 
+                // CRITICAL: Apply drum library remapping for note events
+                if (message.isNoteOnOrOff() && clip->sourceLibrary != DrumLibrary::Unknown)
+                {
+                    DrumLibrary targetLib = getTargetLibrary();
+                    
+                    // Only remap if target library is not Bypass and source != target
+                    if (targetLib != DrumLibrary::Bypass && clip->sourceLibrary != targetLib)
+                    {
+                        uint8_t originalNote = static_cast<uint8_t>(message.getNoteNumber());
+                        uint8_t remappedNote = processor.drumLibraryManager.mapNoteToLibrary(
+                            originalNote, 
+                            clip->sourceLibrary, 
+                            targetLib
+                        );
+                        
+                        // Create new message with remapped note
+                        if (message.isNoteOn())
+                        {
+                            message = juce::MidiMessage::noteOn(
+                                message.getChannel(),
+                                remappedNote,
+                                static_cast<juce::uint8>(message.getVelocity())
+                            );
+                        }
+                        else // Note off
+                        {
+                            message = juce::MidiMessage::noteOff(
+                                message.getChannel(),
+                                remappedNote,
+                                static_cast<juce::uint8>(message.getVelocity())
+                            );
+                        }
+                        
+                        // Restore original timestamp (will be adjusted below)
+                        message.setTimeStamp(event->message.getTimeStamp());
+                    }
+                }
+                
                 // Skip tempo and time signature events (we set our own)
                 if (message.isTempoMetaEvent() || message.isTimeSignatureMetaEvent())
                     continue;
                 
-                // Skip other meta events that might interfere
+                // Skip other meta events (except end of track)
                 if (message.isMetaEvent() && !message.isEndOfTrackMetaEvent())
                     continue;
                 
-                // Get the PPQ from the source file
-                double ticksPerQuarterNote = clipMidiFile.getTimeFormat();
-                if (ticksPerQuarterNote <= 0) ticksPerQuarterNote = 960.0;
+                double originalTicks = message.getTimeStamp();
                 
-                // Convert event time from ticks to seconds using clip's original BPM
-                double eventTimeInSeconds = (message.getTimeStamp() / ticksPerQuarterNote) * (60.0 / clipOriginalBPM);
-                
-                // Only include events within the clip duration
-                if (eventTimeInSeconds > clip->duration)
+                // Filter events beyond the actual MIDI duration (in original tick space)
+                if (originalTicks > maxEventTimeInTicks + 100.0)  // +100 tick tolerance
                     continue;
                 
-                // Calculate absolute time in the exported file
-                double absoluteTimeInSeconds = exportClipStartTime + eventTimeInSeconds;
+                // EXACT same conversion as createCombinedMidiFile:
+                // Step 1: Convert TPQN if needed
+                double convertedTicks = originalTicks * tpqnConversionFactor;
                 
-                if (absoluteTimeInSeconds < 0.0)
+                // Step 2: Scale for BPM (same as GrooveBrowser)
+                double scaledTicks = convertedTicks * tempoScale;
+                
+                // Step 3: Add clip start offset
+                double finalTicks = clipStartTicks + scaledTicks;
+                
+                // Skip negative times (shouldn't happen with proper startOffset)
+                if (finalTicks < 0.0)
+                {
+                    DBG("WARNING: Skipping event with negative time: " + juce::String(finalTicks));
                     continue;
+                }
                 
-                // Convert to ticks using the TRACK's BPM (this is the export BPM)
-                double beatsAtTrackBPM = absoluteTimeInSeconds * (trackBPM / 60.0);
-                double ticksAtTrackBPM = beatsAtTrackBPM * 960.0;
+                // Debug the first note to verify calculation
+                if (!firstEventLogged && message.isNoteOn())
+                {
+                    DBG("  === FIRST NOTE CALCULATION ===");
+                    DBG("    Original ticks: " + juce::String(originalTicks, 2));
+                    DBG("    TPQN converted: " + juce::String(convertedTicks, 2));
+                    DBG("    BPM scaled: " + juce::String(scaledTicks, 2));
+                    DBG("    Clip start ticks: " + juce::String(clipStartTicks, 2));
+                    DBG("    Final ticks: " + juce::String(finalTicks, 2));
+                    DBG("    Verification: " + juce::String((finalTicks / outputTPQN) * (60.0 / headerBPM), 4) + "s");
+                    firstEventLogged = true;
+                }
                 
-                // Create the event with proper timing
+                // Track last event
+                if (message.isNoteOn() || message.isNoteOff())
+                {
+                    lastEventTicks = originalTicks;
+                    lastEventExportTicks = finalTicks;
+                }
+                
+                // Create the event with scaled timing (CRITICAL: set timestamp on message itself!)
                 juce::MidiMessage exportMessage = message;
-                trackSequence.addEvent(exportMessage, ticksAtTrackBPM);
+                exportMessage.setTimeStamp(finalTicks);
+                trackSequence.addEvent(exportMessage);
                 
                 eventCount++;
-                
-                if (eventCount <= 5)  // Log first few events for debugging
-                {
-                    DBG("    Event " + juce::String(eventCount) + 
-                        ": Type=" + (message.isNoteOn() ? "NoteOn" : (message.isNoteOff() ? "NoteOff" : "Other")) +
-                        " Note=" + juce::String(message.getNoteNumber()) +
-                        " at " + juce::String(absoluteTimeInSeconds, 6) + "s" +
-                        " = " + juce::String(ticksAtTrackBPM, 2) + " ticks");
-                }
             }
         }
         
+        DBG("  === CLIP EXPORT SUMMARY ===");
+        DBG("    Last event original ticks: " + juce::String(lastEventTicks, 2));
+        DBG("    Last event export ticks: " + juce::String(lastEventExportTicks, 2));
+        DBG("    Last event export time: " + juce::String((lastEventExportTicks / outputTPQN) * (60.0 / headerBPM), 4) + "s");
+        DBG("    Expected timeline end: " + juce::String((clip->startTime - startOffset) + (actualMidiDurationSeconds * tempoScale), 4) + "s");
         DBG("  Added " + juce::String(eventCount) + " events from this clip");
     }
     
-    // Add end-of-track event
-    double totalDurationSeconds = 0.0;
-    for (const auto* clip : sortedClips)
-    {
-        double clipEnd = (clip->startTime - startOffset) + clip->duration;
-        totalDurationSeconds = juce::jmax(totalDurationSeconds, clipEnd);
-    }
-    
-    if (totalDurationSeconds > 0.0)
-    {
-        double endTicks = (totalDurationSeconds * (trackBPM / 60.0)) * 960.0;
-        auto endOfTrack = juce::MidiMessage::endOfTrack();
-        trackSequence.addEvent(endOfTrack, endTicks);
-        DBG("Added end-of-track at " + juce::String(totalDurationSeconds, 6) + 
-            "s = " + juce::String(endTicks, 2) + " ticks");
-    }
-    
-    // CRITICAL: Sort the sequence AFTER adding all events
+    // Sort the sequence and update matched pairs (same as combined export)
     trackSequence.sort();
     trackSequence.updateMatchedPairs();
     
     // Add the track to the MIDI file
     midiFile.addTrack(trackSequence);
     
-    // Log final statistics
-    int totalEvents = trackSequence.getNumEvents();
-    DBG("Total events in track: " + juce::String(totalEvents));
-    
-    if (totalEvents > 0)
-    {
-        auto* firstEvent = trackSequence.getEventPointer(0);
-        auto* secondEvent = totalEvents > 1 ? trackSequence.getEventPointer(1) : nullptr;
-        
-        if (firstEvent)
-        {
-            DBG("First event: " + (firstEvent->message.isTempoMetaEvent() ? "Tempo" : 
-                                  (firstEvent->message.isTimeSignatureMetaEvent() ? "TimeSig" : "Other")) +
-                " at tick " + juce::String(firstEvent->message.getTimeStamp()));
-        }
-        
-        if (secondEvent)
-        {
-            DBG("Second event: " + (secondEvent->message.isTempoMetaEvent() ? "Tempo" : 
-                                   (secondEvent->message.isTimeSignatureMetaEvent() ? "TimeSig" : "Other")) +
-                " at tick " + juce::String(secondEvent->message.getTimeStamp()));
-        }
-    }
-    
     DBG("=== Track Export Complete ===");
+    DBG("Total events: " + juce::String(trackSequence.getNumEvents()));
     
     return midiFile;
 }
 
 //==============================================================================
-// FIXED: Correct BPM time conversion
+// FIXED: Correct BPM time conversion using clipOriginalBPM
 juce::MidiFile TimelineManager::createCombinedMidiFile() const
 {
+    
     juce::MidiFile midiFile;
-    midiFile.setTicksPerQuarterNote(960);
+    // Don't set TPQN yet - we'll use the first clip's TPQN
     
-    DBG("=== Creating Combined MIDI File ===");
+    double headerBPM = getHeaderBPM();
+    DrumLibrary targetLibrary = getTargetLibrary();  // NEW: Get target library for remapping
     
-    // Collect all clips with their visual boundaries
-    std::vector<ClipBoundary> allClipBoundaries;
+    
+    // Collect all clips from all tracks
+    struct ClipInfo {
+        const MidiClip* clip;
+        double trackBPM;
+        int trackIndex;
+    };
+    std::vector<ClipInfo> allClips;
     
     for (int trackIdx = 0; trackIdx < container->getNumTracks(); ++trackIdx)
     {
@@ -715,82 +791,82 @@ juce::MidiFile TimelineManager::createCombinedMidiFile() const
             if (!clip || !clip->file.existsAsFile())
                 continue;
             
-            ClipBoundary boundary;
-            boundary.startTime = clip->startTime;
+            ClipInfo info;
+            info.clip = clip;
+            info.trackBPM = trackBPM;
+            info.trackIndex = trackIdx;
+            allClips.push_back(info);
             
-            // CRITICAL: Calculate visual end time considering BPM scaling
-            double visualScaleFactor = clip->referenceBPM / trackBPM;
-            double visualDuration = clip->duration * visualScaleFactor;
-            boundary.endTime = clip->startTime + visualDuration;
-            
-            boundary.bpm = trackBPM;
-            boundary.trackIndex = trackIdx;
-            boundary.clip = clip;
-            
-            allClipBoundaries.push_back(boundary);
-            
-            DBG("Track " + juce::String(trackIdx) + " - Clip: " + clip->name + 
-                " | Start: " + juce::String(boundary.startTime, 3) + 
-                " | End: " + juce::String(boundary.endTime, 3) + 
-                " | BPM: " + juce::String(boundary.bpm, 2));
+               
         }
     }
     
-    if (allClipBoundaries.empty())
+    if (allClips.empty())
     {
+        midiFile.setTicksPerQuarterNote(960);  // Default TPQN for empty file
         juce::MidiMessageSequence emptySequence;
-        midiFile.addTrack(emptySequence);
-        return midiFile;
-    }
-    
-    // Check for overlaps with different BPMs
-    juce::String errorMessage;
-    if (checkForOverlapsWithDifferentBPM(allClipBoundaries, errorMessage))
-    {
-        juce::AlertWindow::showMessageBoxAsync(
-            juce::AlertWindow::WarningIcon,
-            "Export Error",
-            errorMessage,
-            "OK"
-        );
-        
-        juce::MidiMessageSequence emptySequence;
+        // Add tempo event even for empty file
+        int microsecondsPerQuarterNote = static_cast<int>(60000000.0 / headerBPM);
+        emptySequence.addEvent(juce::MidiMessage::tempoMetaEvent(microsecondsPerQuarterNote), 0.0);
+        emptySequence.addEvent(juce::MidiMessage::timeSignatureMetaEvent(4, 4), 0.0);
         midiFile.addTrack(emptySequence);
         return midiFile;
     }
     
     // Sort clips by start time
-    std::sort(allClipBoundaries.begin(), allClipBoundaries.end(),
-        [](const ClipBoundary& a, const ClipBoundary& b) {
-            return a.startTime < b.startTime;
+    std::sort(allClips.begin(), allClips.end(),
+        [](const ClipInfo& a, const ClipInfo& b) {
+            return a.clip->startTime < b.clip->startTime;
         });
     
-    // Build tempo map and collect all events
-    struct TempoChange {
-        double timeInSeconds;
-        double bpm;
-    };
-    std::vector<TempoChange> tempoMap;
-    
-    struct TimedEvent {
-        double timeInSeconds;
-        juce::MidiMessage message;
-    };
-    std::vector<TimedEvent> allEvents;
-    
-    // Process each clip
-    for (const auto& boundary : allClipBoundaries)
+    // Get TPQN from the first clip to preserve original timing resolution
+    int outputTPQN = 960;  // Default
+    if (!allClips.empty())
     {
-        const auto* clip = boundary.clip;
+        juce::MidiFile firstClipFile;
+        juce::FileInputStream firstStream(allClips[0].clip->file);
+        if (firstStream.openedOk() && firstClipFile.readFrom(firstStream))
+        {
+            outputTPQN = firstClipFile.getTimeFormat();
+            if (outputTPQN <= 0) outputTPQN = 960;
+        }
+    }
+    
+    midiFile.setTicksPerQuarterNote(outputTPQN);
+    
+    // Create a single sequence to hold all events
+    juce::MidiMessageSequence combinedSequence;
+    
+    // CRITICAL: Always use header BPM as the export tempo (reference BPM for the MIDI file)
+    // Each track's clips will be scaled by their individual track BPMs, but the final
+    // MIDI file tempo is always the header BPM
+    int microsecondsPerQuarterNote = static_cast<int>(60000000.0 / headerBPM);
+    combinedSequence.addEvent(juce::MidiMessage::tempoMetaEvent(microsecondsPerQuarterNote), 0.0);
+    
+    // Add time signature at tick 0
+    combinedSequence.addEvent(juce::MidiMessage::timeSignatureMetaEvent(4, 4), 0.0);
+    
+    
+    // Process each clip: convert using clip's original BPM, then apply time-stretch, then to header BPM
+    for (const auto& clipInfo : allClips)
+    {
+        const auto* clip = clipInfo.clip;
+        double trackBPM = clipInfo.trackBPM;
         
         // Load the MIDI file
         juce::MidiFile clipMidiFile;
         juce::FileInputStream stream(clip->file);
         if (!stream.openedOk() || !clipMidiFile.readFrom(stream))
+        {
             continue;
+        }
         
-        // Get clip's original BPM
-        double clipOriginalBPM = 120.0;
+        // FIXED: Use the stored originalBPM from the clip, not from the MIDI file
+        // This ensures consistency with how the clip was added to the timeline
+        double clipOriginalBPM = clip->originalBPM;
+        
+        // DEBUGGING: Also read BPM from file to compare
+        double bpmFromFile = 120.0;
         for (int t = 0; t < clipMidiFile.getNumTracks(); ++t)
         {
             const auto* track = clipMidiFile.getTrack(t);
@@ -801,26 +877,63 @@ juce::MidiFile TimelineManager::createCombinedMidiFile() const
                 const auto* event = track->getEventPointer(e);
                 if (event && event->message.isTempoMetaEvent())
                 {
-                    clipOriginalBPM = 60.0 / event->message.getTempoSecondsPerQuarterNote();
+                    bpmFromFile = 60.0 / event->message.getTempoSecondsPerQuarterNote();
                     break;
                 }
             }
-            if (clipOriginalBPM != 120.0) break;
+            if (bpmFromFile != 120.0) break;
         }
         
-        // Add tempo change at clip start (if BPM is different from previous)
-        if (tempoMap.empty() || std::abs(tempoMap.back().bpm - boundary.bpm) > 0.01)
+        if (std::abs(clipOriginalBPM - bpmFromFile) > 0.01)
         {
-            TempoChange tc;
-            tc.timeInSeconds = clip->startTime;
-            tc.bpm = boundary.bpm;
-            tempoMap.push_back(tc);
-            
-            DBG("Tempo change: " + juce::String(tc.bpm, 2) + " BPM at " + 
-                juce::String(tc.timeInSeconds, 6) + "s");
         }
         
-        // Process all note events
+        // CRITICAL FIX: Calculate actual MIDI file duration to properly filter events
+        // Find the last event timestamp in the MIDI file
+        double maxEventTimeInTicks = 0.0;
+        for (int t = 0; t < clipMidiFile.getNumTracks(); ++t)
+        {
+            const auto* track = clipMidiFile.getTrack(t);
+            if (!track) continue;
+            
+            for (int e = 0; e < track->getNumEvents(); ++e)
+            {
+                const auto* event = track->getEventPointer(e);
+                if (!event) continue;
+                
+                // Skip meta events when finding max timestamp
+                if (!event->message.isMetaEvent() || event->message.isEndOfTrackMetaEvent())
+                {
+                    maxEventTimeInTicks = juce::jmax(maxEventTimeInTicks, event->message.getTimeStamp());
+                }
+            }
+        }
+        
+        // Convert max timestamp to seconds at original BPM
+        double ticksPerQuarterNote = clipMidiFile.getTimeFormat();
+        if (ticksPerQuarterNote <= 0) ticksPerQuarterNote = 960.0;
+        double actualMidiDurationSeconds = (maxEventTimeInTicks / ticksPerQuarterNote) * (60.0 / clipOriginalBPM);
+        
+            
+        
+        int eventCount = 0;
+        bool firstEventLogged = false;
+        double lastEventTicks = 0.0;
+        double lastEventExportTicks = 0.0;
+        
+        // CRITICAL FIX: Use GrooveBrowser's approach - scale ticks directly!
+        // When trackBPM > originalBPM: clip plays FASTER, so we need FEWER ticks
+        // When trackBPM < originalBPM: clip plays SLOWER, so we need MORE ticks
+        double tempoScale = clipOriginalBPM / trackBPM;  // e.g., 120/400 = 0.3 (fewer ticks = faster)
+        
+        // Calculate clip start time in ticks at EXPORT BPM using the OUTPUT TPQN
+        double clipStartTicks = clip->startTime * (headerBPM / 60.0) * outputTPQN;
+        
+        
+        // If input and output TPQN differ, we need to convert
+        double tpqnConversionFactor = static_cast<double>(outputTPQN) / ticksPerQuarterNote;
+        
+        // Process all MIDI events from all tracks in the clip
         for (int t = 0; t < clipMidiFile.getNumTracks(); ++t)
         {
             const auto* track = clipMidiFile.getTrack(t);
@@ -833,127 +946,113 @@ juce::MidiFile TimelineManager::createCombinedMidiFile() const
                 
                 auto message = event->message;
                 
-                // Skip tempo and time signature events
+                // CRITICAL: Apply drum library remapping for note events
+                if (message.isNoteOnOrOff() && clip->sourceLibrary != DrumLibrary::Unknown)
+                {
+                    DrumLibrary targetLib = getTargetLibrary();
+                    
+                    // Only remap if target library is not Bypass and source != target
+                    if (targetLib != DrumLibrary::Bypass && clip->sourceLibrary != targetLib)
+                    {
+                        uint8_t originalNote = static_cast<uint8_t>(message.getNoteNumber());
+                        uint8_t remappedNote = processor.drumLibraryManager.mapNoteToLibrary(
+                            originalNote, 
+                            clip->sourceLibrary, 
+                            targetLib
+                        );
+                        
+                        // Log remapping for first note
+                        if (!firstEventLogged)
+                        {
+                        }
+                        
+                        // Create new message with remapped note
+                        if (message.isNoteOn())
+                        {
+                            message = juce::MidiMessage::noteOn(
+                                message.getChannel(),
+                                remappedNote,
+                                static_cast<juce::uint8>(message.getVelocity())
+                            );
+                        }
+                        else // Note off
+                        {
+                            message = juce::MidiMessage::noteOff(
+                                message.getChannel(),
+                                remappedNote,
+                                static_cast<juce::uint8>(message.getVelocity())
+                            );
+                        }
+                        
+                        // Restore original timestamp (will be adjusted below)
+                        message.setTimeStamp(event->message.getTimeStamp());
+                    }
+                }
+                
+                // Skip tempo and time signature events (we set our own)
                 if (message.isTempoMetaEvent() || message.isTimeSignatureMetaEvent())
                     continue;
                 
-                // Convert event time from MIDI ticks to seconds using clip's original BPM
-                double ticksPerQuarterNote = clipMidiFile.getTimeFormat();
-                if (ticksPerQuarterNote <= 0) ticksPerQuarterNote = 960.0;  // Match our file's PPQ
+                // Skip other meta events (except end of track)
+                if (message.isMetaEvent() && !message.isEndOfTrackMetaEvent())
+                    continue;
                 
-                double eventTimeInSeconds = (message.getTimeStamp() / ticksPerQuarterNote) * (60.0 / clipOriginalBPM);
+                double originalTicks = message.getTimeStamp();
                 
-                // Calculate absolute time in export
-                double absoluteTime = clip->startTime + eventTimeInSeconds;
+                // Filter events beyond the actual MIDI duration (in original tick space)
+                if (originalTicks > maxEventTimeInTicks + 100.0)  // +100 tick tolerance
+                    continue;
                 
-                // Only add if within clip's visual boundaries
-                if (absoluteTime >= clip->startTime && absoluteTime <= boundary.endTime)
+                // FIXED: Apply BOTH tempo scaling AND TPQN conversion!
+                // Step 1: Convert TPQN if needed
+                double convertedTicks = originalTicks * tpqnConversionFactor;
+                
+                // Step 2: Scale for BPM like GrooveBrowser does
+                double scaledTicks = convertedTicks * tempoScale;
+                
+                // Step 3: Add clip start offset
+                double finalTicks = clipStartTicks + scaledTicks;
+                
+                // Debug the first note to verify calculation
+                if (!firstEventLogged && message.isNoteOn())
                 {
-                    TimedEvent te;
-                    te.timeInSeconds = absoluteTime;
-                    te.message = message;
-                    allEvents.push_back(te);
+                       
+                    firstEventLogged = true;
                 }
+                
+                // Track last event
+                if (message.isNoteOn() || message.isNoteOff())
+                {
+                    lastEventTicks = originalTicks;
+                    lastEventExportTicks = finalTicks;
+                }
+                
+                // Create the event with scaled timing
+                juce::MidiMessage exportMessage = message;
+                exportMessage.setTimeStamp(finalTicks); 
+                combinedSequence.addEvent(exportMessage);
+                
+                eventCount++;
             }
         }
+        
+        
     }
     
-    // Convert everything to MIDI ticks considering tempo changes
-    juce::MidiMessageSequence combinedSequence;
-    
-    // Function to convert seconds to ticks with variable tempo
-    auto secondsToTicks = [&tempoMap](double seconds) -> double {
-        if (tempoMap.empty()) return seconds * (120.0 / 60.0) * 960.0;
-        
-        double ticks = 0.0;
-        double prevTime = 0.0;
-        double prevBPM = tempoMap[0].bpm;
-        
-        for (const auto& tc : tempoMap)
-        {
-            if (tc.timeInSeconds > seconds)
-                break;
-            
-            double deltaSeconds = tc.timeInSeconds - prevTime;
-            double deltaBeats = deltaSeconds * (prevBPM / 60.0);
-            ticks += deltaBeats * 960.0;
-            
-            prevTime = tc.timeInSeconds;
-            prevBPM = tc.bpm;
-        }
-        
-        double deltaSeconds = seconds - prevTime;
-        double deltaBeats = deltaSeconds * (prevBPM / 60.0);
-        ticks += deltaBeats * 960.0;
-        
-        return ticks;
-    };
-    
-    // Add tempo changes to MIDI
-    for (const auto& tc : tempoMap)
-    {
-        double ticks = secondsToTicks(tc.timeInSeconds);
-        int microsecondsPerQuarterNote = static_cast<int>(60000000.0 / tc.bpm);
-        combinedSequence.addEvent(juce::MidiMessage::tempoMetaEvent(microsecondsPerQuarterNote), ticks);
-    }
-    
-    // Add time signature at tick 0 for better DAW compatibility
-    juce::MidiMessage timeSigMsg = juce::MidiMessage::timeSignatureMetaEvent(4, 4);
-    timeSigMsg.setTimeStamp(0);
-    combinedSequence.addEvent(timeSigMsg, 0.0);
-    
-    // Add all note events
-    for (const auto& te : allEvents)
-    {
-        double eventTicks = secondsToTicks(te.timeInSeconds);
-        auto message = te.message;
-        message.setTimeStamp(static_cast<int>(eventTicks + 0.5));  // Round to nearest tick
-        combinedSequence.addEvent(message);
-    }
-    
-    combinedSequence.updateMatchedPairs();
+    // Sort the sequence and update matched pairs
     combinedSequence.sort();
+    combinedSequence.updateMatchedPairs();
+    
+    // Add the combined track to the MIDI file
     midiFile.addTrack(combinedSequence);
     
-    DBG("=== Export Complete ===");
-    DBG("Total events: " + juce::String(allEvents.size()));
-    DBG("Tempo changes: " + juce::String(tempoMap.size()));
     
     return midiFile;
 }
 
 bool TimelineManager::checkForOverlapsWithDifferentBPM(const std::vector<ClipBoundary>& boundaries, juce::String& errorMessage) const
 {
-    for (size_t i = 0; i < boundaries.size(); ++i)
-    {
-        for (size_t j = i + 1; j < boundaries.size(); ++j)
-        {
-            const auto& clip1 = boundaries[i];
-            const auto& clip2 = boundaries[j];
-            
-            // Check if clips overlap
-            bool overlaps = !(clip1.endTime <= clip2.startTime || clip2.endTime <= clip1.startTime);
-            
-            if (overlaps)
-            {
-                // Check if BPMs are different
-                if (std::abs(clip1.bpm - clip2.bpm) > 0.01)
-                {
-                    errorMessage = "Overlapping MIDIs with different BPMs is not allowed.\n\n";
-                    errorMessage += "Overlap detected between:\n";
-                    errorMessage += "â€¢ Track " + juce::String(clip1.trackIndex + 1) + ": \"" + clip1.clip->name + "\" (" + juce::String(clip1.bpm, 1) + " BPM)\n";
-                    errorMessage += "â€¢ Track " + juce::String(clip2.trackIndex + 1) + ": \"" + clip2.clip->name + "\" (" + juce::String(clip2.bpm, 1) + " BPM)\n\n";
-                    errorMessage += "Time range: " + juce::String(juce::jmax(clip1.startTime, clip2.startTime), 2) + "s to " + 
-                                   juce::String(juce::jmin(clip1.endTime, clip2.endTime), 2) + "s\n\n";
-                    errorMessage += "To fix: Either set both clips to the same BPM, or adjust their positions so they don't overlap.";
-                    return true;
-                }
-                
-                DBG("Overlap OK: Same BPM (" + juce::String(clip1.bpm, 2) + ")");
-            }
-        }
-    }
-    
+    // Overlaps are now allowed - clips are converted to header BPM
     return false;
 }
 
@@ -1141,7 +1240,7 @@ void TimelineManager::performExternalDrag(const juce::MouseEvent& e, const juce:
                             }
                         }
                         
-                        DBG("Added clip: " + clipFile.getFileName() + " at offset " + juce::String(timeOffset));
+                        
                     }
                 }
             }
@@ -1228,7 +1327,7 @@ void TimelineManager::performExternalDrag(const juce::MouseEvent& e, const juce:
 }
 
 //==============================================================================
-// âœ… NEW: Check if folder is empty
+// ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ NEW: Check if folder is empty
 bool TimelineManager::isFolderEmpty(const juce::File& folder) const
 {
     if (!folder.exists() || !folder.isDirectory())
@@ -1242,7 +1341,7 @@ bool TimelineManager::isFolderEmpty(const juce::File& folder) const
 }
 
 //==============================================================================
-// âœ… NEW: Clear all contents of a folder
+// ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ NEW: Clear all contents of a folder
 bool TimelineManager::clearFolderContents(const juce::File& folder) const
 {
     if (!folder.exists() || !folder.isDirectory())
@@ -1278,7 +1377,7 @@ bool TimelineManager::clearFolderContents(const juce::File& folder) const
 }
 
 //==============================================================================
-// âœ… NEW: Show confirmation dialog for non-empty folder
+// ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ NEW: Show confirmation dialog for non-empty folder
 bool TimelineManager::confirmOverwriteFolder(const juce::File& folder) const
 {
     if (isFolderEmpty(folder))
@@ -1303,9 +1402,9 @@ bool TimelineManager::confirmOverwriteFolder(const juce::File& folder) const
     message += folder.getFullPathName() + "\n\n";
     message += "It contains:\n";
     if (fileCount > 0)
-        message += "  â€¢ " + juce::String(fileCount) + " file" + (fileCount > 1 ? "s" : "") + "\n";
+        message += "  - " + juce::String(fileCount) + " file" + (fileCount > 1 ? "s" : "") + "\n";
     if (folderCount > 0)
-        message += "  â€¢ " + juce::String(folderCount) + " folder" + (folderCount > 1 ? "s" : "") + "\n";
+        message += "  - " + juce::String(folderCount) + " folder" + (folderCount > 1 ? "s" : "") + "\n";
     message += "\nAll contents will be DELETED before saving.\n\n";
     message += "Do you want to continue?";
     
