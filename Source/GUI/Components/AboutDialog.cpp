@@ -3,7 +3,7 @@
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 
 #define CURRENT_VERSION "0.9.1"
-#define GITHUB_RELEASES_API "https://api.github.com/repos/InToEtherion/DrumGroovePro/releases/latest"
+#define GITHUB_RELEASES_API "https://api.github.com/repos/InToEtherion/DrumGroovePro/releases"
 
 // Semantic version comparison
 static int compareVersions(const juce::String& v1, const juce::String& v2)
@@ -286,53 +286,75 @@ void AboutContent::checkForUpdates()
 
 void AboutContent::run()
 {
-    juce::URL apiUrl(GITHUB_RELEASES_API);
-    
-    // Use WebInputStream to fetch the data
-    std::unique_ptr<juce::InputStream> stream(apiUrl.createInputStream(
-        juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
-        .withConnectionTimeoutMs(5000)
-        .withNumRedirectsToFollow(5)
-        .withHttpRequestCmd("GET")
-    ));
-    
     bool updateAvailable = false;
     
-    if (stream != nullptr)
+    try
     {
-        juce::String response = stream->readEntireStreamAsString();
+        juce::URL apiUrl(GITHUB_RELEASES_API);
         
-        // Parse JSON response
-        auto jsonResult = juce::JSON::parse(response);
+        auto options = juce::URL::InputStreamOptions(juce::URL::ParameterHandling::inAddress)
+                          .withConnectionTimeoutMs(10000)
+                          .withNumRedirectsToFollow(5)
+                          .withExtraHeaders("User-Agent: DrumGroovePro/1.0");
         
-        if (jsonResult.isObject())
+        std::unique_ptr<juce::InputStream> stream(apiUrl.createInputStream(options));
+        
+        if (stream != nullptr)
         {
-            auto jsonObj = jsonResult.getDynamicObject();
-            if (jsonObj != nullptr)
+            juce::String response = stream->readEntireStreamAsString();
+            
+            if (response.isNotEmpty())
             {
-                juce::String latestVersion = jsonObj->getProperty("tag_name").toString();
+                auto jsonResult = juce::JSON::parse(response);
                 
-                // Remove 'v' prefix if present
-                if (latestVersion.startsWith("v"))
-                    latestVersion = latestVersion.substring(1);
-                
-                // Compare versions (only update if latest is NEWER)
-				if (latestVersion.isNotEmpty())
-				{
-					int comparison = compareVersions(latestVersion, CURRENT_VERSION);
-					if (comparison > 0)  // latestVersion is newer
-					{
-						updateAvailable = true;
-					}
-				}
+                // API now returns an ARRAY of releases, not a single object
+                if (jsonResult.isArray())
+                {
+                    auto* jsonArray = jsonResult.getArray();
+                    if (jsonArray != nullptr && jsonArray->size() > 0)
+                    {
+                        // Get the first release (most recent)
+                        auto firstRelease = (*jsonArray)[0];
+                        if (firstRelease.isObject())
+                        {
+                            auto* releaseObj = firstRelease.getDynamicObject();
+                            if (releaseObj != nullptr && releaseObj->hasProperty("tag_name"))
+                            {
+                                juce::String latestVersion = releaseObj->getProperty("tag_name").toString();
+                                
+                                // Remove 'v' prefix if present (v0.9.1 -> 0.9.1)
+                                if (latestVersion.startsWith("v") || latestVersion.startsWith("V"))
+                                    latestVersion = latestVersion.substring(1);
+                                
+                                if (latestVersion.isNotEmpty())
+                                {
+                                    int comparison = compareVersions(latestVersion, CURRENT_VERSION);
+                                    if (comparison > 0)  // latestVersion is newer
+                                    {
+                                        updateAvailable = true;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
     }
-    
-    // Update UI on message thread
-    juce::MessageManager::callAsync([this, updateAvailable]()
+    catch (...)
     {
-        updateCheckComplete(updateAvailable);
+        // Network error - silently fail
+    }
+    
+    // Update UI on message thread with WeakReference
+    juce::WeakReference<juce::Component> weakThis(this);
+    juce::MessageManager::callAsync([weakThis, updateAvailable]()
+    {
+        if (weakThis != nullptr)
+        {
+            if (auto* content = dynamic_cast<AboutContent*>(weakThis.get()))
+                content->updateCheckComplete(updateAvailable);
+        }
     });
 }
 

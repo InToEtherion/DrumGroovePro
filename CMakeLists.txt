@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(DrumGroovePro VERSION 0.9.9)
+project(DrumGroovePro VERSION 0.9.0)
 
 # C++20 standard
 set(CMAKE_CXX_STANDARD 20)
