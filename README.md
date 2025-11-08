@@ -2,6 +2,7 @@
 
 **A  VST3 plugin for browsing, arranging, and exporting MIDI drum grooves with drum library remapping and multi-track timeline capabilities.**
 
+![DrumGroovePro Interface](images/plugin-interface.png)
 ---
 
 ##  Overview
