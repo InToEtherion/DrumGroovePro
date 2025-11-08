@@ -5,17 +5,17 @@
 
 DrumGrooveProcessor::DrumGrooveProcessor()
 : AudioProcessor(BusesProperties()
-#if ! JucePlugin_IsMidiEffect
-#if ! JucePlugin_IsSynth
-.withInput("Input", juce::AudioChannelSet::stereo(), true)
-#endif
-.withOutput("Output", juce::AudioChannelSet::stereo(), true)
-#endif
+                 .withInput("Input", juce::AudioChannelSet::stereo(), true)
+                 .withOutput("Output", juce::AudioChannelSet::stereo(), true)
 ),
 parameters(*this, nullptr, juce::Identifier("DrumGrooveProParams"), createParameterLayout()),
 midiProcessor(drumLibraryManager)
 {
-    drumLibraryManager.loadConfiguration();
+    // Load configuration asynchronously to avoid blocking DAW
+    juce::MessageManager::callAsync([this]()
+    {
+        drumLibraryManager.loadConfiguration();
+    });
 
     // Initialize GUI state tree with default values
     guiStateTree.setProperty("currentBrowserFolder", "", nullptr);
@@ -101,10 +101,37 @@ void DrumGrooveProcessor::releaseResources()
 #ifndef JucePlugin_PreferredChannelConfigurations
 bool DrumGrooveProcessor::isBusesLayoutSupported(const BusesLayout& layouts) const
 {
-    if (layouts.getMainOutputChannelSet() != juce::AudioChannelSet::mono()
-        && layouts.getMainOutputChannelSet() != juce::AudioChannelSet::stereo())
+    // For a MIDI effect, we need to support various audio configurations
+    // Accept mono, stereo, or disabled audio buses
+    
+    // Get input and output channel sets
+    auto mainOutput = layouts.getMainOutputChannelSet();
+    auto mainInput = layouts.getMainInputChannelSet();
+    
+    // Accept disabled buses (no audio)
+    if (mainOutput.isDisabled() && mainInput.isDisabled())
+        return true;
+    
+    // Accept mono or stereo for output
+    if (mainOutput != juce::AudioChannelSet::mono() 
+        && mainOutput != juce::AudioChannelSet::stereo()
+        && !mainOutput.isDisabled())
         return false;
-
+    
+    // Accept mono or stereo for input
+    if (mainInput != juce::AudioChannelSet::mono() 
+        && mainInput != juce::AudioChannelSet::stereo()
+        && !mainInput.isDisabled())
+        return false;
+    
+    // Input and output should match (for pass-through)
+    // OR one can be disabled
+    if (!mainInput.isDisabled() && !mainOutput.isDisabled())
+    {
+        if (mainInput != mainOutput)
+            return false;
+    }
+    
     return true;
 }
 #endif
@@ -172,50 +199,42 @@ juce::AudioProcessorEditor* DrumGrooveProcessor::createEditor()
    }
 
    void DrumGrooveProcessor::setStateInformation(const void* data, int sizeInBytes)
-	{
-		auto xmlState = getXmlFromBinary(data, sizeInBytes);
+{
+    auto xmlState = getXmlFromBinary(data, sizeInBytes);
 
-		if (xmlState != nullptr && xmlState->hasTagName(parameters.state.getType()))
-		{
-			auto newState = juce::ValueTree::fromXml(*xmlState);
-			parameters.replaceState(newState);
+    if (xmlState != nullptr && xmlState->hasTagName(parameters.state.getType()))
+    {
+        auto newState = juce::ValueTree::fromXml(*xmlState);
+        parameters.replaceState(newState);
 
-			// Find and update GUI state tree
-			auto guiChild = newState.getChildWithName("GuiState");
-			if (guiChild.isValid())
-			{
-				guiStateTree = guiChild;
+        // Find and store GUI state tree IN MEMORY (no restoration yet)
+        auto guiChild = newState.getChildWithName("GuiState");
+        if (guiChild.isValid())
+        {
+            guiStateTree = guiChild;
             
-				// Restore complete GUI state to active editor
-				restoreCompleteGuiState();
-			}
+            // DO NOT call restoreCompleteGuiState() here!
+            // The editor will read from guiStateTree when it opens
+            // This avoids blocking file I/O during state loading
+        }
         
-			// CRITICAL FIX: Force parameter notification to update GUI controls
-			// This ensures ComboBoxes sync with loaded parameter values in VST3
-			juce::MessageManager::callAsync([this]()
-			{
-				// Get the actual parameter value that was just loaded
-				float targetLibValue = parameters.getRawParameterValue("targetLibrary")->load();
+        // CRITICAL FIX: Force parameter notification to update GUI controls
+        juce::MessageManager::callAsync([this]()
+        {
+            float targetLibValue = parameters.getRawParameterValue("targetLibrary")->load();
             
-				DBG("=== VST3 State Loaded ===");
-				DBG("Target Library parameter value: " + juce::String(targetLibValue));
+            DBG("=== VST3 State Loaded ===");
+            DBG("Target Library parameter value: " + juce::String(targetLibValue));
             
-				// Notify the parameter listener explicitly
-				// This triggers GrooveBrowser::parameterChanged which syncs the ComboBox
-				auto* targetLibParam = parameters.getParameter("targetLibrary");
-				if (targetLibParam)
-				{
-					// Force notification by temporarily changing and restoring value
-					// (this is a workaround for VST3 state restoration timing issues)
-					targetLibParam->beginChangeGesture();
-					targetLibParam->setValueNotifyingHost(targetLibValue);
-					targetLibParam->endChangeGesture();
-                
-					DBG("Forced targetLibrary parameter notification");
-				}
-			});
-		}
-	}
+            auto* targetLibParam = parameters.getParameter("targetLibrary");
+            if (targetLibParam)
+            {
+                targetLibParam->setValue(targetLibValue);
+                targetLibParam->sendValueChangedMessageToListeners(targetLibValue);
+            }
+        });
+    }
+}
 
 juce::AudioProcessorValueTreeState::ParameterLayout DrumGrooveProcessor::createParameterLayout()
 {

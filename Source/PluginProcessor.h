@@ -154,7 +154,9 @@ public:
     // ValueTree::Listener override for state changes
     void valueTreePropertyChanged(juce::ValueTree& treeWhosePropertyHasChanged,
                                   const juce::Identifier& property) override;
-
+	
+	juce::ValueTree& getGuiStateTree() { return guiStateTree; }
+    const juce::ValueTree& getGuiStateTree() const { return guiStateTree; }
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 

@@ -23,6 +23,7 @@ public:
 
     // Drag and drop
     juce::var getDragSourceDescription(const juce::SparseSet<int>& selectedRows) override;
+	void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
 
     // Set drum parts to display
@@ -49,6 +50,9 @@ private:
     juce::File originalMidiFile;
     juce::File lastTempFile;
     int selectedRow = -1;
+	
+	bool isExternalDragActive = false;
+    juce::Point<int> dragStartPosition;
 
     // Visual elements
     void drawPartItem(juce::Graphics& g, const DrumPart& part, juce::Rectangle<int> bounds, bool isSelected, int rowNumber);
@@ -58,8 +62,11 @@ private:
     // Playback helpers
     void playPart(const DrumPart& part);
     void createTempMidiFile(const DrumPart& part, juce::File& tempFile);
+    
+    // ADD THIS NEW METHOD:
+    void startExternalDragForPart(int partIndex);
 
-    // NEW: Context menu for export
+    // Context menu for export
     void showContextMenu(int row, const juce::Point<int>& position);
     void exportPartToDesktop(const DrumPart& part);
 

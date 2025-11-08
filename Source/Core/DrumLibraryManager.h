@@ -24,7 +24,8 @@ enum class DrumLibrary
     KrimhDrums = 14,
     TheMonarchKit = 15,
     ShreddageDrums = 16,
-    Damage2 = 17
+    Damage2 = 17,
+    Triaz = 18
 };
 
 class DrumLibraryManager

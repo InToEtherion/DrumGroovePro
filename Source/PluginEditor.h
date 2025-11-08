@@ -7,7 +7,6 @@
 
 class DrumGrooveEditor : public juce::AudioProcessorEditor,
                          public juce::DragAndDropContainer,
-                         public juce::OpenGLRenderer,
                          private juce::Timer
 	{
     public:
@@ -16,11 +15,6 @@ class DrumGrooveEditor : public juce::AudioProcessorEditor,
 
         void paint(juce::Graphics&) override;
         void resized() override;
-
-        // OpenGL callbacks for hardware acceleration
-        void newOpenGLContextCreated() override;
-        void renderOpenGL() override;
-        void openGLContextClosing() override;
 
         // Timer callback for BPM updates
         void timerCallback() override;
@@ -38,9 +32,8 @@ class DrumGrooveEditor : public juce::AudioProcessorEditor,
     private:
         // Core components
         DrumGrooveProcessor& processor;
-        juce::OpenGLContext openGLContext;
         std::unique_ptr<MainComponent> mainComponent;
-
+		
         // Simplified state management
         struct EditorState
         {

@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 #include "GUI/LookAndFeel/DrumGrooveLookAndFeel.h"
 #include "GUI/LookAndFeel/ColourPalette.h"
+#include "GUI/Components/MultiTrackContainer.h"
 
 DrumGrooveEditor::DrumGrooveEditor(DrumGrooveProcessor& p)
 : AudioProcessorEditor(&p), processor(p)
@@ -21,7 +22,7 @@ DrumGrooveEditor::DrumGrooveEditor(DrumGrooveProcessor& p)
     auto primaryDisplay = displays.getPrimaryDisplay();
     auto displayArea = primaryDisplay->userArea;
     
-    // Base size for 3440x1440 displays
+    // Base size
     int targetWidth = 1300;
     int targetHeight = 900;
     
@@ -41,16 +42,12 @@ DrumGrooveEditor::DrumGrooveEditor(DrumGrooveProcessor& p)
     auto guiState = processor.getGuiState();
     if (guiState.editorWidth > 0 && guiState.editorHeight > 0)
     {
-        // Use saved size
         targetWidth = guiState.editorWidth;
         targetHeight = guiState.editorHeight;
-        
-        // Ensure it still fits on screen
         targetWidth = juce::jmin(targetWidth, displayArea.getWidth() - 100);
         targetHeight = juce::jmin(targetHeight, displayArea.getHeight() - 100);
     }
     
-    // Set size - simple and direct
     setSize(targetWidth, targetHeight);
     
     // Restore window position if available
@@ -62,34 +59,52 @@ DrumGrooveEditor::DrumGrooveEditor(DrumGrooveProcessor& p)
                                                   targetWidth, targetHeight), false);
         }
     }
-    
-    // Setup OpenGL
-    openGLContext.setOpenGLVersionRequired(juce::OpenGLContext::OpenGLVersion::openGL3_2);
-    openGLContext.setRenderer(this);
-    openGLContext.attachTo(*this);
 
-    // Restore GUI state (clips, tracks, BPM, etc.) - CRITICAL
-    restoreGuiState();
-    
-    // Restore MultiTrackContainer state with delay to ensure components are ready
-    juce::Timer::callAfterDelay(100, [this]()
-    {
-        processor.restoreCompleteGuiState();
-    });
-
-    // Start timer
+    // Start timer for BPM updates
     startTimer(200);
+	
+	// SAFE STATE RESTORATION - delayed to prevent crashes
+    // Restore clips and tracks from processor's stored state
+    juce::Timer::callAfterDelay(100, [safeThis = juce::Component::SafePointer<DrumGrooveEditor>(this)]()
+    {
+        if (safeThis == nullptr || safeThis->mainComponent == nullptr)
+            return;
+            
+        // Get the MultiTrackContainer
+        auto* container = safeThis->mainComponent->getMultiTrackContainer();
+        if (container == nullptr)
+            return;
+            
+        // Check if there's saved state to restore
+        const auto& stateTree = safeThis->processor.getGuiStateTree();
+        if (!stateTree.isValid() || stateTree.getNumChildren() == 0)
+            return; // No saved state, start fresh
+            
+        try
+        {
+            // Restore the visual state (clips, BPMs, positions)
+            container->restoreGuiState(stateTree);
+            
+            // Force repaint to show restored content
+            safeThis->repaint();
+            if (safeThis->mainComponent)
+                safeThis->mainComponent->repaint();
+        }
+        catch (...)
+        {
+            // If restoration fails, just start fresh
+            DBG("State restoration failed - starting with empty timeline");
+        }
+    });
 }
 
 DrumGrooveEditor::~DrumGrooveEditor()
 {
     stopTimer();
     
-    // Save state as backup - critical for persistence
-    // This ensures state is saved even if setVisible(false) wasn't called
+    // Save state as backup
     saveStateToProcessor();
     
-    openGLContext.detach();
     setLookAndFeel(nullptr);
 }
 
@@ -254,23 +269,6 @@ juce::Rectangle<int> DrumGrooveEditor::getValidWindowBounds(int x, int y, int wi
        horizontalScrollPos = xml.getIntAttribute("horizontalScrollPos", 0);
        verticalScrollPos = xml.getIntAttribute("verticalScrollPos", 0);
    }
-
-// EditorState XML methods for future file-based backup if needed
-void DrumGrooveEditor::newOpenGLContextCreated()
-{
-    // Initialize OpenGL resources for hardware acceleration
-}
-
-void DrumGrooveEditor::renderOpenGL()
-{
-    // OpenGL rendering for hardware acceleration
-    juce::OpenGLHelpers::clear(ColourPalette::mainBackground);
-}
-
-void DrumGrooveEditor::openGLContextClosing()
-{
-    // Clean up OpenGL resources
-}
 
 void DrumGrooveEditor::timerCallback()
 {

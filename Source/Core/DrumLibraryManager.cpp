@@ -444,6 +444,38 @@ void DrumLibraryManager::initializeMappingTables()
     damage2ToGM[52] = 49;  // Crash 2
     damage2ToGM[55] = 53;  // Ride bell
     // Note: Keyswitches 60, 61 are ignored (effects and layers)
+	
+	// ========================================
+	// Triaz to General MIDI (index 18)
+	// NOTE: Triaz is a flexible drum machine with 12 customizable channels (C1-B1 / MIDI 36-47)
+	// This mapping assumes a typical drum kit arrangement in Triaz presets
+	auto& triazToGM = mappings[18][0];
+	
+	// Kicks (Channel 1)
+	triazToGM[36] = 36;  // Kick -> GM Kick
+	
+	// Snares (Channels 2-3)
+	triazToGM[37] = 38;  // Snare 1 -> GM Snare
+	triazToGM[38] = 38;  // Snare 2 -> GM Snare
+	triazToGM[40] = 40;  // Snare rim -> GM Snare rim
+	
+	// Hi-hats (Channels 4-5)
+	triazToGM[39] = 42;  // Closed HH -> GM Closed HH
+	triazToGM[42] = 42;  // Closed HH alt -> GM Closed HH
+	triazToGM[44] = 42;  // HH Pedal -> GM Closed HH
+	triazToGM[46] = 46;  // Open HH -> GM Open HH
+	
+	// Toms (Channels 6-8)
+	triazToGM[41] = 41;  // Low Floor Tom
+	triazToGM[43] = 43;  // High Floor Tom
+	triazToGM[45] = 45;  // Low Tom
+	triazToGM[47] = 47;  // Low-Mid Tom
+	
+	// Cymbals and Percussion (Channels 9-12)
+	triazToGM[49] = 49;  // Crash 1
+	triazToGM[51] = 51;  // Ride
+	triazToGM[52] = 49;  // Crash 2 -> GM Crash
+	triazToGM[57] = 49;  // Crash alt -> GM Crash
 }
 
 uint8_t DrumLibraryManager::mapNoteToLibrary(uint8_t note, DrumLibrary sourceLibrary, DrumLibrary targetLibrary) const
@@ -673,6 +705,7 @@ juce::String DrumLibraryManager::getLibraryName(DrumLibrary library)
         case DrumLibrary::TheMonarchKit: return "The Monarch Kit";
         case DrumLibrary::ShreddageDrums: return "Shreddage Drums";
         case DrumLibrary::Damage2: return "Damage 2";
+		case DrumLibrary::Triaz: return "Triaz";
         default: return "Unknown";
     }
 }
@@ -697,6 +730,7 @@ juce::StringArray DrumLibraryManager::getAllLibraryNames()
     names.add(getLibraryName(DrumLibrary::StevenSlateDrums));
     names.add(getLibraryName(DrumLibrary::SuperiorDrummer3));
     names.add(getLibraryName(DrumLibrary::TheMonarchKit));
+	names.add(getLibraryName(DrumLibrary::Triaz));
     names.add(getLibraryName(DrumLibrary::Ugritone));
     return names;
 }
@@ -721,6 +755,7 @@ juce::StringArray DrumLibraryManager::getAllSourceLibraryNames()
     names.add(getLibraryName(DrumLibrary::StevenSlateDrums));
     names.add(getLibraryName(DrumLibrary::SuperiorDrummer3));
     names.add(getLibraryName(DrumLibrary::TheMonarchKit));
+	names.add(getLibraryName(DrumLibrary::Triaz));
     names.add(getLibraryName(DrumLibrary::Ugritone));
     names.add(getLibraryName(DrumLibrary::Unknown));
     return names;
@@ -746,6 +781,7 @@ DrumLibrary DrumLibraryManager::getLibraryFromName(const juce::String& name)
     if (name == "The Monarch Kit") return DrumLibrary::TheMonarchKit;
     if (name == "Shreddage Drums") return DrumLibrary::ShreddageDrums;
     if (name == "Damage 2") return DrumLibrary::Damage2;
+	if (name == "Triaz") return DrumLibrary::Triaz;
     
     return DrumLibrary::Unknown;
 }
