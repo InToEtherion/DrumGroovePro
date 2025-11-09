@@ -476,6 +476,53 @@ void DrumLibraryManager::initializeMappingTables()
 	triazToGM[51] = 51;  // Ride
 	triazToGM[52] = 49;  // Crash 2 -> GM Crash
 	triazToGM[57] = 49;  // Crash alt -> GM Crash
+	
+	// ========================================
+	// MODO DRUM MAPPINGS (index 19)
+	// ========================================
+	// NOTE: MODO Drum follows General MIDI standard (by and large)
+	// Physically modeled drums with extended articulations
+	// ========================================
+	
+	// MODO Drum to General MIDI (mostly identity mapping)
+	auto& modoDrumToGM = mappings[19][0];
+	
+	// Core GM-standard mappings (identity)
+	// Kicks
+	modoDrumToGM[35] = 36;  // Kick 2 -> GM Kick
+	modoDrumToGM[36] = 36;  // Kick -> GM Kick
+	
+	// Snares
+	modoDrumToGM[37] = 37;  // Side stick
+	modoDrumToGM[38] = 38;  // Snare center
+	modoDrumToGM[40] = 40;  // Snare rim
+	
+	// Hi-hats
+	modoDrumToGM[42] = 42;  // Closed HH
+	modoDrumToGM[44] = 42;  // HH Pedal -> Closed HH
+	modoDrumToGM[46] = 46;  // Open HH
+	
+	// Toms
+	modoDrumToGM[41] = 41;  // Low Floor Tom
+	modoDrumToGM[43] = 43;  // High Floor Tom
+	modoDrumToGM[45] = 45;  // Low Tom
+	modoDrumToGM[47] = 47;  // Low-Mid Tom
+	modoDrumToGM[48] = 48;  // Hi-Mid Tom
+	modoDrumToGM[50] = 50;  // High Tom
+	
+	// Cymbals
+	modoDrumToGM[49] = 49;  // Crash 1
+	modoDrumToGM[51] = 51;  // Ride
+	modoDrumToGM[52] = 49;  // China -> GM Crash
+	modoDrumToGM[53] = 53;  // Ride bell
+	modoDrumToGM[55] = 49;  // Splash -> GM Crash
+	modoDrumToGM[57] = 49;  // Crash 2 -> GM Crash
+	modoDrumToGM[59] = 51;  // Ride 2 -> GM Ride
+	
+	// Percussion (sampled in MODO Drum)
+	modoDrumToGM[39] = 39;  // Hand clap
+	modoDrumToGM[54] = 54;  // Tambourine
+	modoDrumToGM[56] = 56;  // Cowbell
 }
 
 uint8_t DrumLibraryManager::mapNoteToLibrary(uint8_t note, DrumLibrary sourceLibrary, DrumLibrary targetLibrary) const
@@ -705,7 +752,8 @@ juce::String DrumLibraryManager::getLibraryName(DrumLibrary library)
         case DrumLibrary::TheMonarchKit: return "The Monarch Kit";
         case DrumLibrary::ShreddageDrums: return "Shreddage Drums";
         case DrumLibrary::Damage2: return "Damage 2";
-		case DrumLibrary::Triaz: return "Triaz";
+        case DrumLibrary::Triaz: return "Triaz";
+        case DrumLibrary::MODODrum: return "MODO Drum";
         default: return "Unknown";
     }
 }
@@ -724,13 +772,14 @@ juce::StringArray DrumLibraryManager::getAllLibraryNames()
     names.add(getLibraryName(DrumLibrary::GeneralMIDI));
     names.add(getLibraryName(DrumLibrary::GetGoodDrums));
     names.add(getLibraryName(DrumLibrary::KrimhDrums));
+    names.add(getLibraryName(DrumLibrary::MODODrum));
     names.add(getLibraryName(DrumLibrary::MTPowerDrumKit2));
     names.add(getLibraryName(DrumLibrary::ShreddageDrums));
     names.add(getLibraryName(DrumLibrary::Sitala));
     names.add(getLibraryName(DrumLibrary::StevenSlateDrums));
     names.add(getLibraryName(DrumLibrary::SuperiorDrummer3));
     names.add(getLibraryName(DrumLibrary::TheMonarchKit));
-	names.add(getLibraryName(DrumLibrary::Triaz));
+    names.add(getLibraryName(DrumLibrary::Triaz));
     names.add(getLibraryName(DrumLibrary::Ugritone));
     return names;
 }
@@ -749,13 +798,14 @@ juce::StringArray DrumLibraryManager::getAllSourceLibraryNames()
     names.add(getLibraryName(DrumLibrary::GeneralMIDI));
     names.add(getLibraryName(DrumLibrary::GetGoodDrums));
     names.add(getLibraryName(DrumLibrary::KrimhDrums));
+    names.add(getLibraryName(DrumLibrary::MODODrum));
     names.add(getLibraryName(DrumLibrary::MTPowerDrumKit2));
     names.add(getLibraryName(DrumLibrary::ShreddageDrums));
     names.add(getLibraryName(DrumLibrary::Sitala));
     names.add(getLibraryName(DrumLibrary::StevenSlateDrums));
     names.add(getLibraryName(DrumLibrary::SuperiorDrummer3));
     names.add(getLibraryName(DrumLibrary::TheMonarchKit));
-	names.add(getLibraryName(DrumLibrary::Triaz));
+    names.add(getLibraryName(DrumLibrary::Triaz));
     names.add(getLibraryName(DrumLibrary::Ugritone));
     names.add(getLibraryName(DrumLibrary::Unknown));
     return names;
@@ -781,7 +831,8 @@ DrumLibrary DrumLibraryManager::getLibraryFromName(const juce::String& name)
     if (name == "The Monarch Kit") return DrumLibrary::TheMonarchKit;
     if (name == "Shreddage Drums") return DrumLibrary::ShreddageDrums;
     if (name == "Damage 2") return DrumLibrary::Damage2;
-	if (name == "Triaz") return DrumLibrary::Triaz;
+    if (name == "Triaz") return DrumLibrary::Triaz;
+    if (name == "MODO Drum") return DrumLibrary::MODODrum;
     
     return DrumLibrary::Unknown;
 }

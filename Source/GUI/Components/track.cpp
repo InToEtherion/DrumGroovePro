@@ -857,6 +857,22 @@ void Track::clearAllClips()
 
 void Track::mouseDrag(const juce::MouseEvent& e)
 {
+	//  CTRL+ALT drag = External drag to DAW with track BPM
+    if (e.mods.isCtrlDown() && e.mods.isAltDown())
+    {
+        if (e.getDistanceFromDragStart() > 10 && !isExternalDragActive)
+        {
+            // Check if we have selected clips
+            auto selectedClips = getSelectedClips();
+            if (!selectedClips.empty())
+            {
+                startExternalDrag();
+                return;
+            }
+        }
+        return;  // Don't process other drag logic when CTRL+ALT is pressed
+    }
+	
     if (isResizing && resizingClip)
     {
         float mouseX = static_cast<float>(e.position.x);

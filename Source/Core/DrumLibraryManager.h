@@ -25,7 +25,8 @@ enum class DrumLibrary
     TheMonarchKit = 15,
     ShreddageDrums = 16,
     Damage2 = 17,
-    Triaz = 18
+    Triaz = 18,
+    MODODrum = 19
 };
 
 class DrumLibraryManager

@@ -5,6 +5,28 @@
 
 // Forward declarations
 class DrumGrooveProcessor;
+class DrumPartsColumn;
+
+// Overlay component to handle CTRL+Drag for external drag to DAW
+class DrumPartDragOverlay : public juce::Component
+{
+public:
+    DrumPartDragOverlay(DrumPartsColumn* parent) : parentColumn(parent) {}
+    
+    void mouseDown(const juce::MouseEvent& e) override;
+    void mouseDrag(const juce::MouseEvent& e) override;
+    void mouseUp(const juce::MouseEvent& e) override;
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
+    
+    void setRow(int rowNum) { row = rowNum; }
+    
+private:
+    DrumPartsColumn* parentColumn = nullptr;
+    int row = -1;
+    bool isDragging = false;
+    
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DrumPartDragOverlay)
+};
 
 class DrumPartsColumn : public juce::ListBox,
                        public juce::ListBoxModel,
@@ -17,14 +39,13 @@ public:
     // ListBoxModel implementation
     int getNumRows() override;
     void paintListBoxItem(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
+    juce::Component* refreshComponentForRow(int rowNumber, bool isRowSelected, juce::Component* existingComponentToUpdate) override;
     void selectedRowsChanged(int newRowSelected) override;
     void listBoxItemDoubleClicked(int row, const juce::MouseEvent& e) override;
-    void listBoxItemClicked(int row, const juce::MouseEvent& e) override;  // NEW: For right-click detection
+    void listBoxItemClicked(int row, const juce::MouseEvent& e) override;
 
     // Drag and drop
     juce::var getDragSourceDescription(const juce::SparseSet<int>& selectedRows) override;
-	void mouseDown(const juce::MouseEvent& e) override;
-    void mouseDrag(const juce::MouseEvent& e) override;
 
     // Set drum parts to display
     void setDrumParts(const juce::Array<DrumPart>& parts, const juce::File& sourceFile);
@@ -42,6 +63,9 @@ public:
     // Playback control
     void playSelectedPart();
     void stopPlayback();
+    
+    // External drag method (called by overlay)
+    void startExternalDrag(int row);
 
 private:
     DrumGrooveProcessor& processor;
@@ -50,9 +74,7 @@ private:
     juce::File originalMidiFile;
     juce::File lastTempFile;
     int selectedRow = -1;
-	
-	bool isExternalDragActive = false;
-    juce::Point<int> dragStartPosition;
+    bool isExternalDragActive = false;
 
     // Visual elements
     void drawPartItem(juce::Graphics& g, const DrumPart& part, juce::Rectangle<int> bounds, bool isSelected, int rowNumber);
@@ -62,9 +84,6 @@ private:
     // Playback helpers
     void playPart(const DrumPart& part);
     void createTempMidiFile(const DrumPart& part, juce::File& tempFile);
-    
-    // ADD THIS NEW METHOD:
-    void startExternalDragForPart(int partIndex);
 
     // Context menu for export
     void showContextMenu(int row, const juce::Point<int>& position);
