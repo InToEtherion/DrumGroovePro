@@ -229,8 +229,8 @@ sudo dnf install -y \
 ### Build Steps
 
 ```bash
-# Initialize JUCE submodule
-git submodule update --init --recursive
+# Clone JUCE
+git clone --recursive https://github.com/juce-framework/JUCE.git
 
 # Clone repository
 git clone https://github.com/InToEtherion/DrumGroovePro.git
