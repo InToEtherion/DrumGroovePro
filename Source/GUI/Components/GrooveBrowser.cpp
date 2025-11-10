@@ -3,6 +3,11 @@
 #include "../../PluginProcessor.h"
 #include "../LookAndFeel/ColourPalette.h"
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
+#include <cstdlib>  // for std::getenv
+
+#if JUCE_LINUX
+#include <sys/stat.h>  // for chmod
+#endif
 
 //==============================================================================
 // DraggableListItemOverlay implementation
@@ -11,7 +16,7 @@
 void DraggableListItemOverlay::mouseDown(const juce::MouseEvent& e)
 {
     isDragging = false;
-    
+
     // Only handle CTRL clicks, pass everything else through
     if (!e.mods.isCtrlDown())
     {
@@ -22,6 +27,13 @@ void DraggableListItemOverlay::mouseDown(const juce::MouseEvent& e)
 
 void DraggableListItemOverlay::mouseDrag(const juce::MouseEvent& e)
 {
+    #if JUCE_LINUX
+    DBG("mouseDrag: Ctrl=" + juce::String(e.mods.isCtrlDown()) +
+    " Alt=" + juce::String(e.mods.isAltDown()) +
+    " Shift=" + juce::String(e.mods.isShiftDown()) +
+    " Distance=" + juce::String(e.getDistanceFromDragStart()));
+    #endif
+
     if (e.mods.isCtrlDown())
     {
         // CTRL+Drag = External drag to DAW
@@ -29,7 +41,7 @@ void DraggableListItemOverlay::mouseDrag(const juce::MouseEvent& e)
         {
             isDragging = true;
             DBG("DraggableListItemOverlay: External drag detected for row " + juce::String(row));
-            
+
             if (parentColumn)
             {
                 parentColumn->startExternalDrag(row);
@@ -50,7 +62,7 @@ void DraggableListItemOverlay::mouseUp(const juce::MouseEvent& e)
         // Pass through to ListBox
         e.eventComponent->getParentComponent()->mouseUp(e.getEventRelativeTo(e.eventComponent->getParentComponent()));
     }
-    
+
     isDragging = false;
 }
 
@@ -67,7 +79,7 @@ void DraggableListItemOverlay::mouseDoubleClick(const juce::MouseEvent& e)
 
 // BrowserColumn implementation
 BrowserColumn::BrowserColumn(const juce::String& columnName, DrumGrooveProcessor& proc)
-    : columnTitle(columnName), selectedRow(-1), processor(proc)
+: columnTitle(columnName), selectedRow(-1), processor(proc)
 {
     setModel(this);
     setRowHeight(24);
@@ -81,14 +93,14 @@ juce::Component* BrowserColumn::refreshComponentForRow(int rowNumber, bool isRow
 {
     // Create transparent overlay component for each row that handles CTRL+Drag
     auto* overlay = dynamic_cast<DraggableListItemOverlay*>(existingComponentToUpdate);
-    
+
     if (overlay == nullptr)
     {
         overlay = new DraggableListItemOverlay(this);
     }
-    
+
     overlay->setRow(rowNumber);
-    
+
     return overlay;
 }
 // Add destructor to clean up temp files:
@@ -109,16 +121,16 @@ void BrowserColumn::loadIcons()
 
     // Try relative to executable
     resourcesDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
-                   .getParentDirectory()
-                   .getChildFile("Resources");
+    .getParentDirectory()
+    .getChildFile("Resources");
 
     if (!resourcesDir.exists())
     {
         // Try in VST3 bundle structure
         resourcesDir = juce::File::getSpecialLocation(juce::File::currentExecutableFile)
-                       .getParentDirectory()
-                       .getParentDirectory()
-                       .getChildFile("Resources");
+        .getParentDirectory()
+        .getParentDirectory()
+        .getChildFile("Resources");
     }
 
     // Load folder icon
@@ -220,9 +232,9 @@ void BrowserColumn::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
         onDoubleClick(row);
 }
 
-void BrowserColumn::setItems(const juce::StringArray& newItems, 
-                            const juce::Array<bool>& newIsFolder, 
-                            const juce::Array<juce::File>& filePaths)
+void BrowserColumn::setItems(const juce::StringArray& newItems,
+                             const juce::Array<bool>& newIsFolder,
+                             const juce::Array<juce::File>& filePaths)
 {
     items = newItems;
     itemIsFolder = newIsFolder;
@@ -268,7 +280,7 @@ juce::var BrowserColumn::getDragSourceDescription(const juce::SparseSet<int>& se
         if (row >= 0 && row < items.size())
         {
             juce::String filename = items[row];
-            
+
             if (itemIsFolder[row])
             {
                 // Folder drag
@@ -298,11 +310,11 @@ void BrowserColumn::startExternalDrag(int rowNumber)
 {
     if (isExternalDragActive)
         return;
-        
+
     isExternalDragActive = true;
-    
+
     DBG("=== STARTING EXTERNAL DRAG FROM ROW " + juce::String(rowNumber) + " ===");
-    
+
     // Validate selection
     if (rowNumber < 0 || rowNumber >= items.size())
     {
@@ -310,14 +322,14 @@ void BrowserColumn::startExternalDrag(int rowNumber)
         isExternalDragActive = false;
         return;
     }
-    
+
     if (itemIsFolder[rowNumber])
     {
         DBG("ERROR: Cannot drag folders");
         isExternalDragActive = false;
         return;
     }
-    
+
     juce::File originalMidiFile = itemFiles[rowNumber];
     if (!originalMidiFile.existsAsFile())
     {
@@ -325,10 +337,10 @@ void BrowserColumn::startExternalDrag(int rowNumber)
         isExternalDragActive = false;
         return;
     }
-    
+
     DBG("File: " + originalMidiFile.getFileName());
     DBG("Path: " + originalMidiFile.getFullPathName());
-    
+
     // Get the GrooveBrowser (which is the DragAndDropContainer)
     auto* grooveBrowser = findParentComponentOfClass<GrooveBrowser>();
     if (!grooveBrowser)
@@ -344,17 +356,17 @@ void BrowserColumn::startExternalDrag(int rowNumber)
         isExternalDragActive = false;
         return;
     }
-    
+
     DBG("Found DragAndDropContainer");
-    
+
     // Get current BPM
     bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
-    double currentBPM = syncToHost ? 
-        processor.getHostBPM() : 
-        processor.parameters.getRawParameterValue("manualBPM")->load();
-    
+    double currentBPM = syncToHost ?
+    processor.getHostBPM() :
+    processor.parameters.getRawParameterValue("manualBPM")->load();
+
     DBG("Current BPM: " + juce::String(currentBPM, 2));
-    
+
     // Read original MIDI to check BPM
     juce::MidiFile originalMidi;
     juce::FileInputStream inputStream(originalMidiFile);
@@ -364,7 +376,7 @@ void BrowserColumn::startExternalDrag(int rowNumber)
         isExternalDragActive = false;
         return;
     }
-    
+
     // Get original BPM from tempo track
     double originalBPM = 120.0;
     bool foundBPM = false;
@@ -384,37 +396,37 @@ void BrowserColumn::startExternalDrag(int rowNumber)
         }
         if (foundBPM) break;
     }
-    
+
     juce::File fileToDrag;
-    
+
     // Only create temp file if BPM adjustment is needed
     if (std::abs(originalBPM - currentBPM) > 0.01)
     {
         DBG("BPM adjustment needed: " + juce::String(originalBPM, 2) + " -> " + juce::String(currentBPM, 2));
-        
+
         // Create temp file with unique name
-        juce::String tempFileName = "DrumGroovePro_drag_" + 
-            juce::String(juce::Random::getSystemRandom().nextInt64()) + ".mid";
+        juce::String tempFileName = "DrumGroovePro_drag_" +
+        juce::String(juce::Random::getSystemRandom().nextInt64()) + ".mid";
         juce::File tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile(tempFileName);
-        
+
         DBG("Creating temp file: " + tempFile.getFullPathName());
-        
+
         // Adjust BPM: scale = originalBPM / currentBPM
         double tempoScale = originalBPM / currentBPM;
         juce::MidiFile adjustedMidi;
-        
+
         // Copy all tracks and scale timestamps
         for (int track = 0; track < originalMidi.getNumTracks(); ++track)
         {
             auto* sourceTrack = originalMidi.getTrack(track);
             juce::MidiMessageSequence newTrack;
-            
+
             for (int i = 0; i < sourceTrack->getNumEvents(); ++i)
             {
                 auto& midiEvent = sourceTrack->getEventPointer(i)->message;
                 double oldTimestamp = sourceTrack->getEventTime(i);
                 double newTimestamp = oldTimestamp * tempoScale;
-                
+
                 // Update tempo events with new BPM
                 if (midiEvent.isTempoMetaEvent())
                 {
@@ -430,14 +442,14 @@ void BrowserColumn::startExternalDrag(int rowNumber)
                     newTrack.addEvent(copiedMessage);
                 }
             }
-            
+
             newTrack.updateMatchedPairs();
             adjustedMidi.addTrack(newTrack);
         }
-        
+
         // Set time format to match original
         adjustedMidi.setTicksPerQuarterNote(originalMidi.getTimeFormat());
-        
+
         // Write to temp file - WITH EXPLICIT FLUSHING
         {
             juce::FileOutputStream outputStream(tempFile);
@@ -448,21 +460,28 @@ void BrowserColumn::startExternalDrag(int rowNumber)
                 isExternalDragActive = false;
                 return;
             }
-            
+
             if (!adjustedMidi.writeTo(outputStream))
             {
                 DBG("ERROR: Failed to write MIDI data to temp file!");
                 isExternalDragActive = false;
                 return;
             }
-            
+
             // CRITICAL: Explicitly flush and close the stream
             outputStream.flush();
         } // Stream goes out of scope and closes here
-        
-        // Wait a tiny bit for Windows to flush the file to disk
+
+        #if JUCE_LINUX
+        // CRITICAL: Set file permissions on Linux for Reaper compatibility
+        // Reaper might reject files without proper read permissions
+        chmod(tempFile.getFullPathName().toRawUTF8(), 0644);  // rw-r--r--
+        DBG("Set Linux file permissions: 0644");
+        #endif
+
+        // Wait a tiny bit for filesystem to sync
         juce::Thread::sleep(50);
-        
+
         // Verify the file was created and has content
         if (!tempFile.existsAsFile())
         {
@@ -470,7 +489,7 @@ void BrowserColumn::startExternalDrag(int rowNumber)
             isExternalDragActive = false;
             return;
         }
-        
+
         juce::int64 fileSize = tempFile.getSize();
         if (fileSize == 0)
         {
@@ -478,12 +497,12 @@ void BrowserColumn::startExternalDrag(int rowNumber)
             isExternalDragActive = false;
             return;
         }
-        
+
         fileToDrag = tempFile;
         DBG("Temp file created successfully:");
         DBG("  Path: " + tempFile.getFullPathName());
         DBG("  Size: " + juce::String(fileSize) + " bytes");
-        
+
         // Clean up previous temp file
         if (lastTempDragFile.existsAsFile())
             lastTempDragFile.deleteFile();
@@ -491,10 +510,44 @@ void BrowserColumn::startExternalDrag(int rowNumber)
     }
     else
     {
+        #if JUCE_LINUX
+        // CRITICAL: On Linux, always create a temp copy even without BPM adjustment
+        // Reaper may not have access to the original file location
+        DBG("Linux: Creating temp copy for Reaper compatibility");
+
+        // Use the ORIGINAL filename in temp directory
+        juce::File tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
+        .getChildFile(originalMidiFile.getFileName());
+
+        DBG("Temp file path: " + tempFile.getFullPathName());
+
+        // Copy original file to temp location
+        if (!originalMidiFile.copyFileTo(tempFile))
+        {
+            DBG("ERROR: Failed to copy file to temp location");
+            isExternalDragActive = false;
+            return;
+        }
+
+        // Set proper permissions for Reaper
+        chmod(tempFile.getFullPathName().toRawUTF8(), 0644);
+        DBG("Temp copy created with 0644 permissions");
+        DBG("Original: " + originalMidiFile.getFullPathName());
+        DBG("Temp:     " + tempFile.getFullPathName());
+
+        fileToDrag = tempFile;
+
+        // Clean up previous temp file
+        if (lastTempDragFile.existsAsFile() && lastTempDragFile != tempFile)
+            lastTempDragFile.deleteFile();
+        lastTempDragFile = tempFile;
+        #else
+        // Windows/Mac: Can use original file directly
         fileToDrag = originalMidiFile;
         DBG("No BPM adjustment needed, using original file");
+        #endif
     }
-    
+
     // Final validation before drag
     if (!fileToDrag.existsAsFile())
     {
@@ -502,7 +555,7 @@ void BrowserColumn::startExternalDrag(int rowNumber)
         isExternalDragActive = false;
         return;
     }
-    
+
     juce::int64 finalSize = fileToDrag.getSize();
     if (finalSize == 0)
     {
@@ -510,20 +563,26 @@ void BrowserColumn::startExternalDrag(int rowNumber)
         isExternalDragActive = false;
         return;
     }
-    
+
     DBG("=== CALLING performExternalDragDropOfFiles ===");
     DBG("File: " + fileToDrag.getFullPathName());
     DBG("Size: " + juce::String(finalSize) + " bytes");
-    
-    // Use absolute Windows path
+
+    #if JUCE_LINUX
+    DBG("Linux file path: " + fileToDrag.getFullPathName());
+    DBG("File exists: " + juce::String(fileToDrag.existsAsFile() ? "YES" : "NO"));
+    DBG("File URL: " + fileToDrag.getFullPathName().toRawUTF8());
+    #endif
+
+    // Use absolute path
     juce::StringArray files;
     files.add(fileToDrag.getFullPathName());
-    
+
     dragContainer->performExternalDragDropOfFiles(files, true, this, [this, fileToDrag]()
     {
         DBG("=== DRAG COMPLETED ===");
         isExternalDragActive = false;
-        
+
         // Cleanup temp files after a delay
         if (fileToDrag.getFileName().startsWith("DrumGroovePro_drag_"))
         {
@@ -537,7 +596,7 @@ void BrowserColumn::startExternalDrag(int rowNumber)
             });
         }
     });
-    
+
     DBG("performExternalDragDropOfFiles returned - drag should be active now!");
 }
 
@@ -545,9 +604,9 @@ void BrowserColumn::startExternalDrag(int rowNumber)
 // GrooveBrowser implementation
 
 GrooveBrowser::GrooveBrowser(DrumGrooveProcessor& p)
-    : processor(p), 
-      currentSourceLibrary(DrumLibrary::Unknown),
-      isHandlingTargetLibraryChange(false)
+: processor(p),
+currentSourceLibrary(DrumLibrary::Unknown),
+isHandlingTargetLibraryChange(false)
 {
     auto& lnf = DrumGrooveLookAndFeel::getInstance();
 
@@ -563,18 +622,18 @@ GrooveBrowser::GrooveBrowser(DrumGrooveProcessor& p)
     {
         targetLibraryCombo.addItem(libraryNames[i], i + 1);
     }
-    
+
     addAndMakeVisible(targetLibraryCombo);
-    
+
     // Load saved library ENUM from config
     DrumLibrary savedLibrary = processor.drumLibraryManager.getLastSelectedTargetLibrary();
     juce::String savedLibraryName = DrumLibraryManager::getLibraryName(savedLibrary);
-    
+
     DBG("=== GrooveBrowser Constructor ===");
     DBG("Loaded from config:");
     DBG("  Enum value: " + juce::String(static_cast<int>(savedLibrary)));
     DBG("  Library name: " + savedLibraryName);
-    
+
     // Find this library name in the ComboBox and get its ID
     int comboIdToSelect = 0;
     for (int i = 0; i < libraryNames.size(); ++i)
@@ -586,13 +645,13 @@ GrooveBrowser::GrooveBrowser(DrumGrooveProcessor& p)
             break;
         }
     }
-    
+
     if (comboIdToSelect == 0)
     {
         DBG("  WARNING: Library not found in ComboBox, defaulting to General MIDI");
         savedLibraryName = "General MIDI";
         savedLibrary = DrumLibrary::GeneralMIDI;
-        
+
         // Find General MIDI in the list
         for (int i = 0; i < libraryNames.size(); ++i)
         {
@@ -603,33 +662,33 @@ GrooveBrowser::GrooveBrowser(DrumGrooveProcessor& p)
             }
         }
     }
-    
+
     // Set ComboBox selection BEFORE creating attachment
     targetLibraryCombo.setSelectedId(comboIdToSelect, juce::dontSendNotification);
-    
+
     DBG("ComboBox set to ID: " + juce::String(comboIdToSelect) + ", text: " + targetLibraryCombo.getText());
-    
+
     // Now update the parameter to match
     // The parameter stores the index (0-based) in the alphabetical list
     int paramIndex = comboIdToSelect - 1;  // Convert 1-based ID to 0-based index
-    
+
     auto* targetLibParam = processor.parameters.getParameter("targetLibrary");
     if (targetLibParam)
     {
         float normalizedValue = processor.parameters.getParameterRange("targetLibrary").convertTo0to1(paramIndex);
         targetLibParam->setValueNotifyingHost(normalizedValue);
-        
+
         DBG("Set parameter to index: " + juce::String(paramIndex) + " (normalized: " + juce::String(normalizedValue) + ")");
     }
-    
+
     // Create parameter attachment
     libraryAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(
         processor.parameters, "targetLibrary", targetLibraryCombo);
-    
+
     // Add listeners AFTER attachment
     targetLibraryCombo.addListener(this);
     processor.parameters.addParameterListener("targetLibrary", this);
-    
+
     DBG("GrooveBrowser initialized successfully");
     DBG("  Final ComboBox text: " + targetLibraryCombo.getText());
 
@@ -678,20 +737,20 @@ void GrooveBrowser::comboBoxChanged(juce::ComboBox* comboBoxThatHasChanged)
     if (comboBoxThatHasChanged == &targetLibraryCombo)
     {
         DBG("=== ComboBox Changed ===");
-        
+
         // Get the selected text and convert to enum
         juce::String selectedText = targetLibraryCombo.getText();
         DrumLibrary selectedLibrary = DrumLibraryManager::getLibraryFromName(selectedText);
-        
+
         DBG("  Selected text: " + selectedText);
         DBG("  Converted to enum: " + juce::String(static_cast<int>(selectedLibrary)));
         DBG("  Enum name: " + DrumLibraryManager::getLibraryName(selectedLibrary));
-        
+
         // Save the ENUM VALUE to config (not the ComboBox ID!)
         processor.drumLibraryManager.setLastSelectedTargetLibrary(selectedLibrary);
-        
+
         DBG("  Saved to config.xml: " + juce::String(static_cast<int>(selectedLibrary)));
-        
+
         // Handle the library change
         handleTargetLibraryChange();
     }
@@ -704,10 +763,10 @@ void GrooveBrowser::parameterChanged(const juce::String& parameterID, float newV
     {
         DBG("=== parameterChanged: targetLibrary ===");
         DBG("  New value: " + juce::String(newValue));
-        
+
         // Sync combo box with parameter value
         syncComboBoxWithParameter();
-        
+
         // Handle the library change
         handleTargetLibraryChange();
     }
@@ -719,22 +778,22 @@ void GrooveBrowser::handleTargetLibraryChange()
     // Prevent recursive calls
     if (isHandlingTargetLibraryChange)
         return;
-        
+
     isHandlingTargetLibraryChange = true;
-    
+
     DrumLibrary newTargetLibrary = getCurrentTargetLibrary();
-    
+
     DBG("=== Target Library Change ===");
-    DBG("New Target: " + juce::String(static_cast<int>(newTargetLibrary)) + 
-        " (" + targetLibraryCombo.getText() + ")");
-    
+    DBG("New Target: " + juce::String(static_cast<int>(newTargetLibrary)) +
+    " (" + targetLibraryCombo.getText() + ")");
+
     // If we have a current MIDI file loaded, re-dissect it immediately
     if (currentMidiFile.existsAsFile() && !currentDrumParts.isEmpty())
     {
         DBG("Re-dissecting current file in real-time");
         redissectCurrentMidiFile();
     }
-    
+
     isHandlingTargetLibraryChange = false;
 }
 
@@ -742,20 +801,20 @@ void GrooveBrowser::syncComboBoxWithParameter()
 {
     // Get current parameter value
     int paramValue = static_cast<int>(processor.parameters.getRawParameterValue("targetLibrary")->load());
-    
+
     // Convert to combo box ID (param is 0-based index, combo is 1-based ID)
     int comboId = paramValue + 1;
-    
+
     // Get current combo box selection
     int currentComboId = targetLibraryCombo.getSelectedId();
-    
+
     if (currentComboId != comboId)
     {
         // Update combo box without triggering listener
         targetLibraryCombo.removeListener(this);
         targetLibraryCombo.setSelectedId(comboId, juce::dontSendNotification);
         targetLibraryCombo.addListener(this);
-        
+
         DBG("syncComboBoxWithParameter: Updated combo box");
         DBG("  Param value: " + juce::String(paramValue));
         DBG("  Combo ID: " + juce::String(comboId));
@@ -774,19 +833,19 @@ void GrooveBrowser::redissectCurrentMidiFile()
         return;
 
     DrumLibrary newTargetLibrary = getCurrentTargetLibrary();
-    
-    DBG("Re-dissecting " + currentMidiFile.getFileName() + 
-        " with target library: " + juce::String(static_cast<int>(newTargetLibrary)) +
-        " (" + DrumLibraryManager::getLibraryName(newTargetLibrary) + ")");
+
+    DBG("Re-dissecting " + currentMidiFile.getFileName() +
+    " with target library: " + juce::String(static_cast<int>(newTargetLibrary)) +
+    " (" + DrumLibraryManager::getLibraryName(newTargetLibrary) + ")");
 
     // CRITICAL: Always perform full re-dissection to ensure accurate real-time updates
     // This guarantees that all drum parts are correctly categorized and remapped
     currentDrumParts = midiDissector.dissectMidiFileWithLibraryManager(
-        currentMidiFile, 
-        currentSourceLibrary, 
-        newTargetLibrary, 
+        currentMidiFile,
+        currentSourceLibrary,
+        newTargetLibrary,
         processor.drumLibraryManager);
-    
+
     // Update source library in parts
     for (auto& part : currentDrumParts)
     {
@@ -808,20 +867,20 @@ DrumLibrary GrooveBrowser::getCurrentTargetLibrary() const
 {
     // Get the selected text from combo box
     juce::String selectedText = targetLibraryCombo.getText();
-    
+
     if (selectedText.isEmpty())
     {
         DBG("WARNING: ComboBox text is empty, defaulting to General MIDI");
         return DrumLibrary::GeneralMIDI;
     }
-    
+
     // Convert the text to enum using the library manager
     DrumLibrary library = DrumLibraryManager::getLibraryFromName(selectedText);
-    
+
     DBG("getCurrentTargetLibrary:");
     DBG("  ComboBox text: " + selectedText);
     DBG("  Enum value: " + juce::String(static_cast<int>(library)));
-    
+
     return library;
 }
 
@@ -872,7 +931,7 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
         // Get the header BPM (user's desired playback speed)
         double headerBPM = 120.0;
         bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
-        
+
         if (syncToHost)
         {
             headerBPM = processor.getHostBPM();
@@ -882,7 +941,7 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
             headerBPM = processor.parameters.getRawParameterValue("manualBPM")->load();
         }
 
-        // âœ… FIX: Pass original MIDI BPM (120.0) as reference, header BPM as target
+        // Ã¢Å“â€¦ FIX: Pass original MIDI BPM (120.0) as reference, header BPM as target
         // This makes the file play faster/slower based on header BPM
         processor.midiProcessor.addMidiClip(file, 0.0, sourceLib, 120.0, headerBPM, 0, 10.0, "preview_" + juce::Uuid().toString());
         processor.midiProcessor.setPlayheadPosition(0.0);
@@ -898,13 +957,13 @@ void GrooveBrowser::handleColumnDoubleClick(int columnIndex, int row)
         return;
 
     auto* column = folderColumns[columnIndex];
-    
+
     // CRITICAL FIX: Ignore double-click on folders - do nothing
     if (column->isSelectedItemFolder())
     {
         return;  // Only single-click navigation for folders
     }
-    
+
     // Double-click on MIDI file = play
     juce::File selectedFile = column->getSelectedFile();
     if (selectedFile.existsAsFile() && selectedFile.hasFileExtension(".mid;.midi"))
@@ -939,7 +998,7 @@ void GrooveBrowser::handleMidiFileSelection(const juce::File& midiFile)
 
     // Store the source library for future remapping
     currentSourceLibrary = sourceLib;
-    
+
     // Get the current target library
     DrumLibrary targetLib = getCurrentTargetLibrary();
 
@@ -958,16 +1017,16 @@ void GrooveBrowser::handleMidiFileSelection(const juce::File& midiFile)
         updateColumnsLayout();
 
         DBG("MIDI file dissected: " + midiFile.getFileName() +
-            " -> " + juce::String(currentDrumParts.size()) + " parts (Source: " + 
-            juce::String(static_cast<int>(sourceLib)) + ", Target: " + 
-            juce::String(static_cast<int>(targetLib)) + ")");
+        " -> " + juce::String(currentDrumParts.size()) + " parts (Source: " +
+        juce::String(static_cast<int>(sourceLib)) + ", Target: " +
+        juce::String(static_cast<int>(targetLib)) + ")");
     }
     else
     {
         removePartsColumn();
         DBG("No drum parts found in: " + midiFile.getFileName());
     }
-    
+
     // FIX: Notify main component about file selection to update path display
     handleFileSelection(midiFile);
 }
@@ -975,7 +1034,7 @@ void GrooveBrowser::handleMidiFileSelection(const juce::File& midiFile)
 void GrooveBrowser::handleDrumPartSelection(const DrumPart& part)
 {
     DBG("Drum part selected: " + part.displayName +
-        " (" + juce::String(part.eventCount) + " events)");
+    " (" + juce::String(part.eventCount) + " events)");
 }
 
 void GrooveBrowser::handleDrumPartDoubleClick(const DrumPart& part)
@@ -1015,13 +1074,13 @@ void GrooveBrowser::timerCallback()
     {
         partsColumn->repaint();
     }
-    
+
     // Check if BPM changed during playback
     if (processor.midiProcessor.isPlaying())
     {
         double currentBPM = 120.0;
         bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
-        
+
         if (syncToHost)
         {
             currentBPM = processor.getHostBPM();
@@ -1030,7 +1089,7 @@ void GrooveBrowser::timerCallback()
         {
             currentBPM = processor.parameters.getRawParameterValue("manualBPM")->load();
         }
-        
+
         // If BPM changed, update track 0 (browser playback uses track 0)
         if (std::abs(currentBPM - lastKnownBPM) > 0.01)
         {
@@ -1055,7 +1114,7 @@ void GrooveBrowser::restoreNavigationState(const juce::File& folder, const juce:
 void GrooveBrowser::addFolderColumn(const juce::String& title, bool isFileColumn)
 {
     auto* column = new BrowserColumn(title, processor);
-	
+
     column->onSelectionChange = [this, column]() {
         int columnIndex = folderColumns.indexOf(column);
         handleColumnSelection(columnIndex);
@@ -1065,7 +1124,7 @@ void GrooveBrowser::addFolderColumn(const juce::String& title, bool isFileColumn
         int columnIndex = folderColumns.indexOf(column);
         handleColumnDoubleClick(columnIndex, row);
     };
-    
+
     // CRITICAL FIX: Set up right-click callback for folders
     column->onRightClickFolder = [this](const juce::File& folder) {
         // The showContextMenu in BrowserColumn already handles this
@@ -1104,7 +1163,7 @@ void GrooveBrowser::addPartsColumn()
     if (partsColumn)
         return; // Already exists
 
-    partsColumn = std::make_unique<DrumPartsColumn>(processor, "Drum Parts");
+        partsColumn = std::make_unique<DrumPartsColumn>(processor, "Drum Parts");
 
     // Set up callbacks
     partsColumn->onPartSelected = [this](const DrumPart& part) {
@@ -1116,7 +1175,7 @@ void GrooveBrowser::addPartsColumn()
     };
 
     columnsContainer.addAndMakeVisible(partsColumn.get());
-    
+
     updateColumnsLayout();  // ADD THIS LINE
 }
 
@@ -1203,7 +1262,7 @@ void GrooveBrowser::navigateToFolder(const juce::File& folder, int columnIndex)
     // Update navigation path
     while (navigationPath.size() > columnIndex)
         navigationPath.removeLast();
-    
+
     if (columnIndex < navigationPath.size())
         navigationPath.set(columnIndex, folder);
     else
@@ -1231,11 +1290,11 @@ void GrooveBrowser::handleColumnSelection(int columnIndex)
     {
         // MIDI file selected - dissect it
         currentMidiFile = selectedFile;
-        
+
         // FIX: Call handleFileSelection FIRST before dissection
         // This ensures the file path display updates immediately
         handleFileSelection(selectedFile);
-        
+
         // Determine source library from root folder
         DrumLibrary sourceLib = DrumLibrary::Unknown;
         for (int i = 0; i < processor.drumLibraryManager.getNumRootFolders(); ++i)
@@ -1266,9 +1325,9 @@ void GrooveBrowser::handleColumnSelection(int columnIndex)
             updateColumnsLayout();
 
             DBG("MIDI file dissected: " + currentMidiFile.getFileName() +
-                " -> " + juce::String(currentDrumParts.size()) + " parts (Source: " + 
-                juce::String(static_cast<int>(sourceLib)) + ", Target: " + 
-                juce::String(static_cast<int>(targetLib)) + ")");
+            " -> " + juce::String(currentDrumParts.size()) + " parts (Source: " +
+            juce::String(static_cast<int>(sourceLib)) + ", Target: " +
+            juce::String(static_cast<int>(targetLib)) + ")");
         }
         else
         {
@@ -1310,7 +1369,7 @@ void BrowserColumn::listBoxItemClicked(int row, const juce::MouseEvent& e)
 {
     if (e.mods.isPopupMenu()) // Right-click
     {
-        showContextMenu(row, e.getMouseDownPosition());  
+        showContextMenu(row, e.getMouseDownPosition());
     }
 }
 
@@ -1318,10 +1377,10 @@ void BrowserColumn::showContextMenu(int row, const juce::Point<int>& position)
 {
     if (row < 0 || row >= items.size())
         return;
-    
+
     // Get actual mouse screen position
     auto mousePos = juce::Desktop::getInstance().getMainMouseSource().getScreenPosition();
-    
+
     // Handle folders - show folder context menu
     if (itemIsFolder[row])
     {
@@ -1332,63 +1391,63 @@ void BrowserColumn::showContextMenu(int row, const juce::Point<int>& position)
             menu.addItem(1, "Add to Favorites");
             menu.addSeparator();
             menu.addItem(2, "Show in Explorer");
-            
+
             // Show menu at the actual mouse position
             menu.showMenuAsync(juce::PopupMenu::Options()
-                                  .withTargetScreenArea(juce::Rectangle<int>(static_cast<int>(mousePos.x), 
-                                                                             static_cast<int>(mousePos.y), 1, 1)),
-                [this, folder](int result)
-                {
-                    if (result == 1) // Add to Favorites
-                    {
-                        // Show dialog to optionally rename
-                        juce::AlertWindow w("Add to Favorites", 
-                                          "Enter a name for this favorite folder:", 
-                                          juce::AlertWindow::NoIcon);
-                        w.addTextEditor("name", folder.getFileName());
-                        w.addButton("Add", 1, juce::KeyPress(juce::KeyPress::returnKey));
-                        w.addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
-                        
-                        if (w.runModalLoop() == 1)
-                        {
-                            auto name = w.getTextEditorContents("name");
-                            processor.favoritesManager.addFavorite(folder, name);
-                        }
-                    }
-                    else if (result == 2) // Show in Explorer
-                    {
-                        folder.revealToUser();
-                    }
-                });
+            .withTargetScreenArea(juce::Rectangle<int>(static_cast<int>(mousePos.x),
+                                                       static_cast<int>(mousePos.y), 1, 1)),
+                               [this, folder](int result)
+                               {
+                                   if (result == 1) // Add to Favorites
+                                   {
+                                       // Show dialog to optionally rename
+                                       juce::AlertWindow w("Add to Favorites",
+                                                           "Enter a name for this favorite folder:",
+                                                           juce::AlertWindow::NoIcon);
+                                       w.addTextEditor("name", folder.getFileName());
+                                       w.addButton("Add", 1, juce::KeyPress(juce::KeyPress::returnKey));
+                                       w.addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+                                       if (w.runModalLoop() == 1)
+                                       {
+                                           auto name = w.getTextEditorContents("name");
+                                           processor.favoritesManager.addFavorite(folder, name);
+                                       }
+                                   }
+                                   else if (result == 2) // Show in Explorer
+                                   {
+                                       folder.revealToUser();
+                                   }
+                               });
         }
         return;
     }
-    
+
     // Handle MIDI files
     juce::File midiFile = itemFiles[row];
     if (!midiFile.existsAsFile())
         return;
-    
+
     juce::PopupMenu menu;
     menu.addItem(1, "Export to Desktop...");
     menu.addSeparator();
     menu.addItem(2, "Show in Explorer");
-    
+
     // Show menu at actual mouse position
     menu.showMenuAsync(juce::PopupMenu::Options()
-                          .withTargetScreenArea(juce::Rectangle<int>(static_cast<int>(mousePos.x), 
-                                                                     static_cast<int>(mousePos.y), 1, 1)),
-        [this, midiFile](int result)
-        {
-            if (result == 1)
-            {
-                exportFileToDesktop(midiFile);
-            }
-            else if (result == 2)
-            {
-                midiFile.revealToUser();
-            }
-        });
+    .withTargetScreenArea(juce::Rectangle<int>(static_cast<int>(mousePos.x),
+                                               static_cast<int>(mousePos.y), 1, 1)),
+                       [this, midiFile](int result)
+                       {
+                           if (result == 1)
+                           {
+                               exportFileToDesktop(midiFile);
+                           }
+                           else if (result == 2)
+                           {
+                               midiFile.revealToUser();
+                           }
+                       });
 }
 
 void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
@@ -1396,25 +1455,25 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     if (!originalMidiFile.existsAsFile())
     {
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-            "Export Error", "File doesn't exist!", "OK");
+                                               "Export Error", "File doesn't exist!", "OK");
         return;
     }
-    
+
     // Get current plugin BPM (header BPM)
     bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
-    double currentBPM = syncToHost ? processor.getHostBPM() 
-                                   : processor.parameters.getRawParameterValue("manualBPM")->load();
-    
+    double currentBPM = syncToHost ? processor.getHostBPM()
+    : processor.parameters.getRawParameterValue("manualBPM")->load();
+
     // Read original MIDI file
     juce::MidiFile originalMidi;
     juce::FileInputStream inputStream(originalMidiFile);
     if (!inputStream.openedOk() || !originalMidi.readFrom(inputStream))
     {
         juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
-            "Export Error", "Failed to read MIDI file!", "OK");
+                                               "Export Error", "Failed to read MIDI file!", "OK");
         return;
     }
-    
+
     // Get original BPM from MIDI file
     double originalBPM = 120.0;
     for (int t = 0; t < originalMidi.getNumTracks(); ++t)
@@ -1434,18 +1493,18 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
             if (originalBPM != 120.0) break;
         }
     }
-    
+
     // Get Desktop directory
     auto desktopDir = juce::File::getSpecialLocation(juce::File::userDesktopDirectory);
-    
+
     // Create unique filename on Desktop
     juce::String baseName = originalMidiFile.getFileNameWithoutExtension();
-    
+
     // Add BPM to filename for clarity
     baseName += "_" + juce::String(static_cast<int>(currentBPM)) + "bpm";
-    
+
     juce::File exportFile = desktopDir.getChildFile(baseName + ".mid");
-    
+
     // Ensure unique filename if file already exists
     int counter = 1;
     while (exportFile.existsAsFile())
@@ -1453,59 +1512,59 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
         exportFile = desktopDir.getChildFile(baseName + "_" + juce::String(counter) + ".mid");
         counter++;
     }
-    
+
     // Check if BPM adjustment is needed
     bool needsAdjustment = std::abs(currentBPM - originalBPM) > 0.1;
-    
+
     if (needsAdjustment)
     {
-        
-        // âœ… CORRECTED: originalBPM / currentBPM (was backwards!)
+
+        // Ã¢Å“â€¦ CORRECTED: originalBPM / currentBPM (was backwards!)
         double timeStretchRatio = originalBPM / currentBPM;
-        
+
         // Create adjusted MIDI file
         juce::MidiFile adjustedMidi;
-        adjustedMidi.setTicksPerQuarterNote(originalMidi.getTimeFormat() > 0 ? 
-                                           originalMidi.getTimeFormat() : 480);
-        
+        adjustedMidi.setTicksPerQuarterNote(originalMidi.getTimeFormat() > 0 ?
+        originalMidi.getTimeFormat() : 480);
+
         for (int t = 0; t < originalMidi.getNumTracks(); ++t)
         {
             const auto* originalTrack = originalMidi.getTrack(t);
             if (!originalTrack) continue;
-            
+
             juce::MidiMessageSequence newTrack;
-            
+
             // Add tempo event to first track
             if (t == 0)
             {
                 int microsecondsPerQuarterNote = static_cast<int>(60000000.0 / currentBPM);
                 newTrack.addEvent(juce::MidiMessage::tempoMetaEvent(microsecondsPerQuarterNote), 0.0);
             }
-            
+
             // Process all events in the track
             for (int i = 0; i < originalTrack->getNumEvents(); ++i)
             {
                 const auto* event = originalTrack->getEventPointer(i);
                 if (!event) continue;
-                
+
                 auto message = event->message;
-                
+
                 // Skip tempo events (we set our own)
-                if (message.isTempoMetaEvent()) 
+                if (message.isTempoMetaEvent())
                     continue;
-                
+
                 // Apply time stretch to event timestamp
                 double originalTimestamp = message.getTimeStamp();
                 double newTimestamp = originalTimestamp * timeStretchRatio;
                 message.setTimeStamp(newTimestamp);
-                
+
                 newTrack.addEvent(message, message.getTimeStamp());
             }
-            
+
             newTrack.updateMatchedPairs();
             adjustedMidi.addTrack(newTrack);
         }
-        
+
         // Write adjusted MIDI to Desktop
         juce::FileOutputStream outputStream(exportFile);
         if (outputStream.openedOk())
@@ -1526,9 +1585,9 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     else
     {
         // No BPM adjustment needed - just copy the file
-        
+
         bool success = originalMidiFile.copyFileTo(exportFile);
-        
+
         if (!success)
         {
             juce::AlertWindow::showMessageBoxAsync(
@@ -1539,34 +1598,34 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
             return;
         }
     }
-    
+
     // Verify export was successful
     if (exportFile.existsAsFile() && exportFile.getSize() > 0)
     {
-        
+
         // Show success message with BPM info
         juce::String message = "MIDI file exported to Desktop";
         if (needsAdjustment)
         {
-            message += "\n\nBPM adjusted: " + juce::String(originalBPM, 1) + " â†’ " + juce::String(currentBPM, 1);
+            message += "\n\nBPM adjusted: " + juce::String(originalBPM, 1) + " Ã¢â€ â€™ " + juce::String(currentBPM, 1);
         }
         message += "\n\nFile: " + exportFile.getFileName();
-        
+
         // Show success message with option to reveal file
         juce::AlertWindow::showAsync(
             juce::MessageBoxOptions()
-                .withIconType(juce::AlertWindow::InfoIcon)
-                .withTitle("Export Successful")
-                .withMessage(message)
-                .withButton("OK")
-                .withButton("Show in Explorer"),
-            [exportFile](int result)
-            {
-                if (result == 2) // "Show in Explorer" button
-                {
-                    exportFile.revealToUser();
-                }
-            });
+            .withIconType(juce::AlertWindow::InfoIcon)
+            .withTitle("Export Successful")
+            .withMessage(message)
+            .withButton("OK")
+            .withButton("Show in Explorer"),
+                                     [exportFile](int result)
+                                     {
+                                         if (result == 2) // "Show in Explorer" button
+                                         {
+                                             exportFile.revealToUser();
+                                         }
+                                     });
     }
     else
     {

@@ -5,17 +5,25 @@
 
 DrumGrooveProcessor::DrumGrooveProcessor()
 : AudioProcessor(BusesProperties()
-                 .withInput("Input", juce::AudioChannelSet::stereo(), true)
-                 .withOutput("Output", juce::AudioChannelSet::stereo(), true)
+.withInput("Input", juce::AudioChannelSet::stereo(), true)
+.withOutput("Output", juce::AudioChannelSet::stereo(), true)
 ),
 parameters(*this, nullptr, juce::Identifier("DrumGrooveProParams"), createParameterLayout()),
 midiProcessor(drumLibraryManager)
 {
-    // Load configuration asynchronously to avoid blocking DAW
+    // CRITICAL: Conditional loading to handle both Linux scanning and Windows runtime
+    // Linux Reaper scanner doesn't run message loop, so we need sync loading
+    // Windows DAWs need async to prevent "Not Responding" freeze
+    #if JUCE_LINUX
+    // On Linux, load synchronously for Reaper validator compatibility
+    drumLibraryManager.loadConfiguration();
+    #else
+    // On Windows/Mac, load asynchronously to prevent freezing
     juce::MessageManager::callAsync([this]()
     {
         drumLibraryManager.loadConfiguration();
     });
+    #endif
 
     // Initialize GUI state tree with default values
     guiStateTree.setProperty("currentBrowserFolder", "", nullptr);
@@ -103,27 +111,27 @@ bool DrumGrooveProcessor::isBusesLayoutSupported(const BusesLayout& layouts) con
 {
     // For a MIDI effect, we need to support various audio configurations
     // Accept mono, stereo, or disabled audio buses
-    
+
     // Get input and output channel sets
     auto mainOutput = layouts.getMainOutputChannelSet();
     auto mainInput = layouts.getMainInputChannelSet();
-    
+
     // Accept disabled buses (no audio)
     if (mainOutput.isDisabled() && mainInput.isDisabled())
         return true;
-    
+
     // Accept mono or stereo for output
-    if (mainOutput != juce::AudioChannelSet::mono() 
+    if (mainOutput != juce::AudioChannelSet::mono()
         && mainOutput != juce::AudioChannelSet::stereo()
         && !mainOutput.isDisabled())
         return false;
-    
+
     // Accept mono or stereo for input
-    if (mainInput != juce::AudioChannelSet::mono() 
+    if (mainInput != juce::AudioChannelSet::mono()
         && mainInput != juce::AudioChannelSet::stereo()
         && !mainInput.isDisabled())
         return false;
-    
+
     // Input and output should match (for pass-through)
     // OR one can be disabled
     if (!mainInput.isDisabled() && !mainOutput.isDisabled())
@@ -131,7 +139,7 @@ bool DrumGrooveProcessor::isBusesLayoutSupported(const BusesLayout& layouts) con
         if (mainInput != mainOutput)
             return false;
     }
-    
+
     return true;
 }
 #endif
@@ -178,27 +186,27 @@ juce::AudioProcessorEditor* DrumGrooveProcessor::createEditor()
     return new DrumGrooveEditor(*this);
 }
 
-   void DrumGrooveProcessor::getStateInformation(juce::MemoryBlock& destData)
-   {
-       // Save complete GUI state before serializing
-       saveCompleteGuiState();
-       
-       auto state = parameters.copyState();
-       
-       // Append GUI state tree to the main state
-       if (guiStateTree.isValid())
-       {
-           state.appendChild(guiStateTree.createCopy(), nullptr);
-       }
-       
-       auto xml = state.createXml();
-       if (xml != nullptr)
-       {
-           copyXmlToBinary(*xml, destData);
-       }
-   }
+void DrumGrooveProcessor::getStateInformation(juce::MemoryBlock& destData)
+{
+    // Save complete GUI state before serializing
+    saveCompleteGuiState();
 
-   void DrumGrooveProcessor::setStateInformation(const void* data, int sizeInBytes)
+    auto state = parameters.copyState();
+
+    // Append GUI state tree to the main state
+    if (guiStateTree.isValid())
+    {
+        state.appendChild(guiStateTree.createCopy(), nullptr);
+    }
+
+    auto xml = state.createXml();
+    if (xml != nullptr)
+    {
+        copyXmlToBinary(*xml, destData);
+    }
+}
+
+void DrumGrooveProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
     auto xmlState = getXmlFromBinary(data, sizeInBytes);
 
@@ -212,20 +220,20 @@ juce::AudioProcessorEditor* DrumGrooveProcessor::createEditor()
         if (guiChild.isValid())
         {
             guiStateTree = guiChild;
-            
+
             // DO NOT call restoreCompleteGuiState() here!
             // The editor will read from guiStateTree when it opens
             // This avoids blocking file I/O during state loading
         }
-        
+
         // CRITICAL FIX: Force parameter notification to update GUI controls
         juce::MessageManager::callAsync([this]()
         {
             float targetLibValue = parameters.getRawParameterValue("targetLibrary")->load();
-            
+
             DBG("=== VST3 State Loaded ===");
             DBG("Target Library parameter value: " + juce::String(targetLibValue));
-            
+
             auto* targetLibParam = parameters.getParameter("targetLibrary");
             if (targetLibParam)
             {
@@ -251,7 +259,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout DrumGrooveProcessor::createP
         "manualBPM",
         "Manual BPM",
         juce::NormalisableRange<float>(20.0f, 300.0f, 0.1f),
-        120.0f));
+                                                           120.0f));
 
     // Target Library parameter - UPDATED with all new libraries
     juce::StringArray libraryChoices;
@@ -279,19 +287,19 @@ juce::AudioProcessorValueTreeState::ParameterLayout DrumGrooveProcessor::createP
         libraryChoices,
         7)); // Default to "General MIDI" (index 7)
 
-    // Track Solo parameter
-    layout.add(std::make_unique<juce::AudioParameterBool>(
-        "trackSolo",
-        "Track Solo",
-        false));
+        // Track Solo parameter
+        layout.add(std::make_unique<juce::AudioParameterBool>(
+            "trackSolo",
+            "Track Solo",
+            false));
 
-    // Track Mute parameter
-    layout.add(std::make_unique<juce::AudioParameterBool>(
-        "trackMute",
-        "Track Mute",
-        false));
+        // Track Mute parameter
+        layout.add(std::make_unique<juce::AudioParameterBool>(
+            "trackMute",
+            "Track Mute",
+            false));
 
-    return layout;
+        return layout;
 }
 
 // GUI State Management Implementation
@@ -376,17 +384,17 @@ void DrumGrooveProcessor::saveCompleteGuiState()
 void DrumGrooveProcessor::saveCompleteGuiState(MultiTrackContainer* container)
 {
     if (!container) return;
-    
+
     // Save the complete state tree from MultiTrackContainer
     juce::ValueTree completeState = container->saveGuiState();
-    
+
     // Merge with existing guiStateTree (preserve browser state)
     guiStateTree.removeAllChildren(nullptr);
     for (int i = 0; i < completeState.getNumChildren(); ++i)
     {
         guiStateTree.appendChild(completeState.getChild(i).createCopy(), nullptr);
     }
-    
+
     // Copy all properties
     for (int i = 0; i < completeState.getNumProperties(); ++i)
     {
@@ -412,4 +420,3 @@ void DrumGrooveProcessor::restoreCompleteGuiState()
         }
     }
 }
-

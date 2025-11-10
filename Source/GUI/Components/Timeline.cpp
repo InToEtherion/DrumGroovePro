@@ -6,13 +6,14 @@
 #include "../../Utils/TimelineUtils.h"
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 #include "../LookAndFeel/ColourPalette.h"
+#include <cmath>  // for std::abs
 
 // Command classes for undo/redo
 class AddClipCommand : public TimelineCommand
 {
 public:
     AddClipCommand(Timeline* tl, const MidiClip& clip)
-        : timeline(tl), clip(clip) {}
+    : timeline(tl), clip(clip) {}
 
     void execute() override {
         timeline->clips.push_back(std::make_unique<MidiClip>(clip));
@@ -22,10 +23,10 @@ public:
     void undo() override {
         timeline->clips.erase(
             std::remove_if(timeline->clips.begin(), timeline->clips.end(),
-                [this](const std::unique_ptr<MidiClip>& c) {
-                    return c->id == clip.id;
-                }),
-            timeline->clips.end());
+                           [this](const std::unique_ptr<MidiClip>& c) {
+                               return c->id == clip.id;
+                           }),
+                           timeline->clips.end());
         timeline->repaint();
     }
 
@@ -38,16 +39,16 @@ class DeleteClipsCommand : public TimelineCommand
 {
 public:
     DeleteClipsCommand(Timeline* tl, const std::vector<MidiClip>& clips)
-        : timeline(tl), deletedClips(clips) {}
+    : timeline(tl), deletedClips(clips) {}
 
     void execute() override {
         for (const auto& clip : deletedClips) {
             timeline->clips.erase(
                 std::remove_if(timeline->clips.begin(), timeline->clips.end(),
-                    [&clip](const std::unique_ptr<MidiClip>& c) {
-                        return c->id == clip.id;
-                    }),
-                timeline->clips.end());
+                               [&clip](const std::unique_ptr<MidiClip>& c) {
+                                   return c->id == clip.id;
+                               }),
+                               timeline->clips.end());
         }
         timeline->repaint();
     }
@@ -68,7 +69,7 @@ class MoveClipsCommand : public TimelineCommand
 {
 public:
     MoveClipsCommand(Timeline* tl, const std::vector<std::pair<juce::String, double>>& moves)
-        : timeline(tl), clipMoves(moves) {}
+    : timeline(tl), clipMoves(moves) {}
 
     void execute() override {
         if (oldPositions.empty()) {
@@ -148,7 +149,7 @@ private:
 
 // Timeline implementation
 Timeline::Timeline(DrumGrooveProcessor& p)
-    : processor(p)
+: processor(p)
 {
     setWantsKeyboardFocus(true);
     addKeyListener(this);
@@ -156,11 +157,24 @@ Timeline::Timeline(DrumGrooveProcessor& p)
     selectionValid = false;
     selectionStart = 0.0;
     selectionEnd = 0.0;
-    
+
+    #if JUCE_LINUX
+    // Linux-specific optimizations for smoother playhead animation
+    setBufferedToImage(false);  // Disable image caching, render directly
+    setOpaque(true);            // We always fill the background
+
+    // Enable OpenGL hardware acceleration on Linux for smooth playhead
+    openGLContext.setRenderer(nullptr);  // Use default JUCE renderer
+    openGLContext.setContinuousRepainting(false);  // Manual repaint control
+    openGLContext.attachTo(*this);  // Attach to this component
+
+    DBG("OpenGL enabled on Linux for Timeline");
+    #endif
+
     // FIXED: Initialize grid interval based on initial zoom level
     zoomLevel = 100.0f; // Default zoom
     gridInterval = TimelineUtils::calculateOptimalGridInterval(zoomLevel);
-    
+
     trackHeader = std::make_unique<TrackHeader>(processor, *this);
     addAndMakeVisible(trackHeader.get());
 
@@ -171,6 +185,11 @@ Timeline::~Timeline()
 {
     stopTimer();
     removeKeyListener(this);
+
+    #if JUCE_LINUX
+    // Detach OpenGL context before destruction
+    openGLContext.detach();
+    #endif
 }
 
 void Timeline::paint(juce::Graphics& g)
@@ -336,7 +355,7 @@ void Timeline::mouseDrag(const juce::MouseEvent& e)
             newDuration = snapToGrid(resizingClip->startTime + newDuration) - resizingClip->startTime;
 
         resizingClip->duration = newDuration;
-        
+
         // CRITICAL FIX: Notify MidiProcessor of clip boundary changes during playback
         if (playing)
         {
@@ -346,7 +365,7 @@ void Timeline::mouseDrag(const juce::MouseEvent& e)
                 resizingClip->duration
             );
         }
-        
+
         repaint();
     }
     else if (isResizingLeft && resizingClip)
@@ -363,7 +382,7 @@ void Timeline::mouseDrag(const juce::MouseEvent& e)
 
         resizingClip->startTime = newStartTime;
         resizingClip->duration = endTime - newStartTime;
-        
+
         // CRITICAL FIX: Notify MidiProcessor of clip boundary changes during playback
         if (playing)
         {
@@ -373,7 +392,7 @@ void Timeline::mouseDrag(const juce::MouseEvent& e)
                 resizingClip->duration
             );
         }
-        
+
         repaint();
     }
     else if (isDragging)
@@ -395,7 +414,7 @@ void Timeline::mouseDrag(const juce::MouseEvent& e)
 
                         newTime = juce::jmax(0.0, newTime);
                         clip->startTime = newTime;
-                        
+
                         // CRITICAL FIX: Notify MidiProcessor of clip position changes during playback
                         if (playing)
                         {
@@ -405,7 +424,7 @@ void Timeline::mouseDrag(const juce::MouseEvent& e)
                                 clip->duration
                             );
                         }
-                        
+
                         break;
                     }
                 }
@@ -419,7 +438,7 @@ void Timeline::mouseDrag(const juce::MouseEvent& e)
 
         for (auto& clip : clips)
         {
-            float clipX = timeToPixels(clip->startTime);  
+            float clipX = timeToPixels(clip->startTime);
             double trackBPM = getTrackBPM();
             double visualScaleFactor = clip->referenceBPM / trackBPM;
             float clipWidth = static_cast<float>(clip->duration * zoomLevel * visualScaleFactor);
@@ -622,12 +641,12 @@ void Timeline::itemDragEnter(const SourceDetails& details)
     ghostClip = std::make_unique<MidiClip>();
     ghostClip->name = details.description.toString();
     ghostClip->startTime = 0;
-    
+
     // FIXED: Set realistic duration instead of hardcoded 2.0
     // Parse the drop description to determine if it's a MIDI file or drum part
     juce::String description = details.description.toString();
     juce::StringArray parts = juce::StringArray::fromTokens(description, "|", "");
-    
+
     if (parts.size() >= 2 && parts[1] == "PART")
     {
         // Drum part - shorter duration
@@ -658,7 +677,7 @@ void Timeline::itemDragEnter(const SourceDetails& details)
     {
         ghostClip->duration = 2.0; // Fallback
     }
-    
+
     ghostClip->colour = ColourPalette::primaryBlue.withAlpha(0.3f);
 
     repaint();
@@ -675,15 +694,15 @@ void Timeline::itemDragMove(const SourceDetails& dragSourceDetails)
             double halfClipDuration = ghostClip->duration * 0.5;
             double centeredTime = mouseTime - halfClipDuration;
             ghostClip->startTime = snapToGrid(centeredTime);
-            
+
             // CRITICAL: Set drop indicator to exact same position as ghost clip
             // Both ghost clip and drop indicator draw at same X coordinate
             dropIndicatorX = timeToPixels(ghostClip->startTime);
-            
+
             // DEBUG: Verify positions
-            DBG("Timeline - Ghost start: " + juce::String(ghostClip->startTime, 6) + 
-                ", Drop X: " + juce::String(dropIndicatorX) + 
-                ", Recalc X: " + juce::String(timeToPixels(ghostClip->startTime)));
+            DBG("Timeline - Ghost start: " + juce::String(ghostClip->startTime, 6) +
+            ", Drop X: " + juce::String(dropIndicatorX) +
+            ", Recalc X: " + juce::String(timeToPixels(ghostClip->startTime)));
         }
         else
         {
@@ -719,7 +738,7 @@ void Timeline::itemDropped(const SourceDetails& details)
     // FIXED: BPM inheritance logic - if timeline is empty, consider track BPM
     double targetBPM = getTrackBPM();
     double dropTime = pixelsToTime(static_cast<float>(details.localPosition.x));
-    
+
     // FIXED: Center the clip on drop position
     double halfClipDuration = ghostClip ? ghostClip->duration * 0.5 : 2.0;
     double centeredTime = dropTime - halfClipDuration;
@@ -757,19 +776,19 @@ void Timeline::play()
     // Clear all existing clips before adding new ones
     // This prevents stale clips from previous play sessions
     processor.midiProcessor.clearAllClips();
-    
+
     // Get current track BPM for all clips
     double trackBPM = getTrackBPM();
-    
+
     // Detect source library for each clip based on its file location
     auto& library = processor.drumLibraryManager;
-    
+
     // Add all clips with current track BPM and proper source library detection
     for (const auto& clip : clips)
     {
         // Detect source library from file path
         DrumLibrary sourceLib = DrumLibrary::Unknown;
-        
+
         for (int i = 0; i < library.getNumRootFolders(); ++i)
         {
             auto rootFolder = library.getRootFolder(i);
@@ -780,21 +799,21 @@ void Timeline::play()
                 break;
             }
         }
-        
+
         // If no source library detected, file might be from external source or drag/drop
         if (sourceLib == DrumLibrary::Unknown)
         {
             DBG("Clip " + clip->name + " using Unknown source library (external file)");
         }
-        
+
         processor.midiProcessor.addMidiClip(
-            clip->file, 
-            clip->startTime, 
-            sourceLib, 
+            clip->file,
+            clip->startTime,
+            sourceLib,
             clip->referenceBPM,
             trackBPM,
             0,  // Track number (0 for main timeline)
-            clip->duration  // CRITICAL FIX: Pass explicit duration to ensure sync between visual and playback
+        clip->duration  // CRITICAL FIX: Pass explicit duration to ensure sync between visual and playback
         );
     }
 
@@ -822,6 +841,7 @@ void Timeline::play()
     processor.midiProcessor.play();
 
     playing = true;
+    lastRenderedPlayheadPosition = playheadPosition;  // Initialize for smooth animation
     startHighPrecisionTimer();
 }
 
@@ -839,6 +859,7 @@ void Timeline::stop()
     processor.midiProcessor.stop();
     processor.midiProcessor.clearAllClips();
     stopTimer();
+    lastRenderedPlayheadPosition = -1.0;  // Reset for next playback
     repaint();
 }
 
@@ -915,26 +936,26 @@ void Timeline::setZoom(float pixelsPerSecond)
 {
     // Clamp zoom level to reasonable bounds
     float newZoomLevel = juce::jlimit(10.0f, 500.0f, pixelsPerSecond);
-    
+
     // Store the time position that's currently at the center of the view
     float viewWidth = static_cast<float>(getWidth() - TRACK_HEADER_WIDTH);
     float centerX = viewWidth / 2.0f;
     double centerTime = pixelsToTime(centerX + TRACK_HEADER_WIDTH);
-    
+
     // Update zoom level
     zoomLevel = newZoomLevel;
-    
+
     // Update grid interval based on new zoom
     gridInterval = TimelineUtils::calculateOptimalGridInterval(zoomLevel);
-    
+
     // Recalculate viewStartTime to keep the same time at the center
     // This ensures clips stay at their correct time positions
     double newViewWidth = viewWidth / zoomLevel;  // Width in seconds at new zoom
     viewStartTime = centerTime - (newViewWidth / 2.0);
-    
+
     // Don't allow scrolling before time 0
     viewStartTime = juce::jmax(0.0, viewStartTime);
-    
+
     repaint();
 }
 
@@ -1115,7 +1136,7 @@ double Timeline::pixelsToTime(float pixels) const
     // Ensure we account for track header offset
     if (pixels < TRACK_HEADER_WIDTH)
         return viewStartTime;
-    
+
     // Convert pixels to time: subtract header width, divide by zoom, add view start
     return viewStartTime + ((pixels - TRACK_HEADER_WIDTH) / zoomLevel);
 }
@@ -1129,21 +1150,29 @@ float Timeline::timeToPixels(double time) const
 void Timeline::startHighPrecisionTimer()
 {
     lastPlaybackTime = juce::Time::getMillisecondCounterHiRes() / 1000.0;
-    startTimer(16);
+
+    #if JUCE_LINUX
+    // On Linux, use very high refresh rate (240Hz) for smoother playhead animation
+    // Linux compositors batch repaints aggressively, so we flood with updates
+    startTimer(4);  // ~240 FPS - compositor will throttle to screen refresh
+    #else
+    // Windows/Mac: 60 FPS is sufficient
+    startTimer(16);  // ~60 FPS
+    #endif
 }
 
 void Timeline::timerCallback()
 {
     if (playing)
     {
-        // âœ… CRITICAL FIX: ONLY read playhead position from audio processor
+        // Ã¢Å“â€¦ CRITICAL FIX: ONLY read playhead position from audio processor
         // DO NOT write it back! Audio thread is the single source of truth.
         // Writing to playheadPosition from message thread causes data race and note skipping.
         playheadPosition = processor.midiProcessor.getPlayheadPosition();
-        
-        // âŒ REMOVED: DO NOT call syncPlayheadPosition here!
+
+        // Ã¢ÂÅ’ REMOVED: DO NOT call syncPlayheadPosition here!
         // It writes to playheadPosition, causing data race with audio thread
-        
+
         // Handle loop restart (this IS an intentional seek, so setPlayheadPosition is OK)
         if (loopEnabled && selectionValid && playheadPosition >= selectionEnd)
         {
@@ -1165,7 +1194,33 @@ void Timeline::timerCallback()
             updateAutoScroll();
         }
 
+        #if JUCE_LINUX
+        // LINUX: Simplified high-frequency repaint strategy
+        // Repaint only the playhead region at 240 FPS
+        // Let the compositor handle vsync limiting
+
+        float currentX = timeToX(playheadPosition);
+        float previousX = timeToX(lastRenderedPlayheadPosition);
+
+        // Only repaint if playhead moved at least 1 pixel
+        if (std::abs(currentX - previousX) >= 1.0f)
+        {
+            // Repaint narrow vertical strip covering old and new playhead positions
+            float minX = std::min(currentX, previousX) - 10.0f;
+            float maxX = std::max(currentX, previousX) + 10.0f;
+
+            juce::Rectangle<int> playheadRegion(
+                static_cast<int>(minX), 0,
+                                                static_cast<int>(maxX - minX), getHeight()
+            );
+
+            repaint(playheadRegion);
+            lastRenderedPlayheadPosition = playheadPosition;
+        }
+        #else
+        // Windows/Mac: Full repaint is fast enough
         repaint();
+        #endif
     }
 }
 
@@ -1196,9 +1251,9 @@ void Timeline::drawRuler(juce::Graphics& g)
     g.fillRect(rulerBounds);
 
     g.setColour(juce::Colour(0xff3c3c3c));
-    g.drawLine(static_cast<float>(rulerBounds.getX()), 
+    g.drawLine(static_cast<float>(rulerBounds.getX()),
                static_cast<float>(RULER_HEIGHT),
-               static_cast<float>(rulerBounds.getRight()), 
+               static_cast<float>(rulerBounds.getRight()),
                static_cast<float>(RULER_HEIGHT));
 
     g.setColour(juce::Colour(0xff969696));
@@ -1208,7 +1263,7 @@ void Timeline::drawRuler(juce::Graphics& g)
     // Calculate visible time range
     double startTime = viewStartTime;
     double endTime = pixelsToTime(static_cast<float>(getWidth()));
-    
+
     // Use appropriate time step based on zoom
     double timeStep = gridInterval;
     if (gridInterval < 0.1)
@@ -1224,12 +1279,12 @@ void Timeline::drawRuler(juce::Graphics& g)
     for (double time = std::floor(startTime / timeStep) * timeStep; time <= endTime; time += timeStep)
     {
         float x = timeToPixels(time);
-        
+
         // Only draw if within visible bounds
         if (x >= TRACK_HEADER_WIDTH && x <= getWidth())
         {
-            g.drawLine(x, static_cast<float>(RULER_HEIGHT - 10), 
-                      x, static_cast<float>(RULER_HEIGHT));
+            g.drawLine(x, static_cast<float>(RULER_HEIGHT - 10),
+                       x, static_cast<float>(RULER_HEIGHT));
 
             // Format time display
             juce::String timeText;
@@ -1246,13 +1301,13 @@ void Timeline::drawRuler(juce::Graphics& g)
                 int millis = static_cast<int>((time - static_cast<int>(time)) * 1000);
                 timeText = juce::String::formatted("%d:%02d.%03d", minutes, seconds, millis);
             }
-            
-            g.drawText(timeText, 
-                      static_cast<int>(x - 30), 
-                      0, 
-                      60, 
-                      RULER_HEIGHT - 10, 
-                      juce::Justification::centred);
+
+            g.drawText(timeText,
+                       static_cast<int>(x - 30),
+                       0,
+                       60,
+                       RULER_HEIGHT - 10,
+                       juce::Justification::centred);
         }
     }
 }
@@ -1263,29 +1318,29 @@ void Timeline::drawGrid(juce::Graphics& g)
     // Draw grid background to prevent black areas
     auto gridArea = getTimelineArea();
     gridArea.removeFromTop(RULER_HEIGHT);
-    
+
     g.setColour(ColourPalette::secondaryBackground);
     g.fillRect(gridArea);
-    
+
     g.setColour(ColourPalette::timelineGrid);
 
     // Calculate visible range using the same coordinate system as clips
     double startTime = viewStartTime;
     double endTime = pixelsToTime(static_cast<float>(getWidth()));
-    
+
     double gridStep = gridInterval;
 
     // Draw grid lines for the visible time range
     for (double time = std::floor(startTime / gridStep) * gridStep; time <= endTime; time += gridStep)
     {
         float x = timeToPixels(time);
-        
+
         // Only draw if within visible bounds
         if (x >= static_cast<float>(TRACK_HEADER_WIDTH) && x <= getWidth())
         {
-            g.drawVerticalLine(static_cast<int>(x), 
-                             static_cast<float>(RULER_HEIGHT), 
-                             static_cast<float>(getHeight()));
+            g.drawVerticalLine(static_cast<int>(x),
+                               static_cast<float>(RULER_HEIGHT),
+                               static_cast<float>(getHeight()));
         }
     }
 }
@@ -1296,17 +1351,17 @@ void Timeline::drawClips(juce::Graphics& g)
     // This must match the coordinate system used by timeToPixels/pixelsToTime
     double visibleStartTime = viewStartTime;
     double visibleEndTime = pixelsToTime(static_cast<float>(getWidth()));
-    
+
     // Add a small buffer to catch clips at the edges
     const double BUFFER_SECONDS = 0.5;
     visibleStartTime -= BUFFER_SECONDS;
     visibleEndTime += BUFFER_SECONDS;
-    
+
     for (const auto& clip : clips)
     {
         // Calculate when the clip ends
         double clipEndTime = clip->startTime + clip->duration;
-        
+
         // First visibility check: is the clip within the visible time range?
         // A clip is visible if any part of it overlaps with [visibleStartTime, visibleEndTime]
         if (clipEndTime < visibleStartTime || clip->startTime > visibleEndTime)
@@ -1315,20 +1370,20 @@ void Timeline::drawClips(juce::Graphics& g)
         // Calculate the X position using consistent coordinate transformation
         // This ensures clips always appear at their correct time position
         float x = timeToPixels(clip->startTime);
-        
+
         // CRITICAL FIX: Calculate width using the SAME formula as MidiProcessor
         // Visual scale = referenceBPM / trackBPM (NOT 120.0 / trackBPM)
         // This ensures visual width matches playback duration exactly
         double trackBPM = getTrackBPM();
         double visualScaleFactor = clip->referenceBPM / trackBPM;
         float width = static_cast<float>(clip->duration * zoomLevel * visualScaleFactor);
-        
-        
+
+
         // Second visibility check: is the clip actually on screen in pixel space?
         // This catches edge cases where time-based check might be imprecise
         if (x + width < TRACK_HEADER_WIDTH || x > getWidth())
             continue;
-        
+
         // Ensure clips are always at least 2 pixels wide for visibility
         width = juce::jmax(2.0f, width);
 
@@ -1341,15 +1396,15 @@ void Timeline::drawClips(juce::Graphics& g)
             clipColour = clipColour.withSaturation(0.3f);
 
         // Draw clip background (brighter if selected)
-        g.setColour(clip->isSelected ? 
-                   clipColour.brighter(0.3f) : 
-                   clipColour);
+        g.setColour(clip->isSelected ?
+        clipColour.brighter(0.3f) :
+        clipColour);
         g.fillRoundedRectangle(clipBounds, 4.0f);
 
         // Draw clip border (yellow if selected)
-        g.setColour(clip->isSelected ? 
-                   juce::Colours::yellow : 
-                   juce::Colours::white.withAlpha(0.5f));
+        g.setColour(clip->isSelected ?
+        juce::Colours::yellow :
+        juce::Colours::white.withAlpha(0.5f));
         g.drawRoundedRectangle(clipBounds, 4.0f, 2.0f);
 
         // Draw clip name if there's enough space
@@ -1358,7 +1413,7 @@ void Timeline::drawClips(juce::Graphics& g)
             g.setColour(juce::Colours::white.withAlpha(0.8f));
             auto& lnf = DrumGrooveLookAndFeel::getInstance();
             g.setFont(lnf.getSmallFont());
-            
+
             auto textBounds = clipBounds.reduced(6.0f, 4.0f);
             g.drawText(clip->name, textBounds, juce::Justification::topLeft, false);
         }
@@ -1411,7 +1466,7 @@ void Timeline::drawMidiDotsInClip(juce::Graphics& g, const MidiClip& clip, juce:
     // Calculate actual MIDI file duration properly
     double maxTimeStamp = 0;
     juce::MidiMessageSequence allNotes;
-    
+
     for (int t = 0; t < midiFile.getNumTracks(); ++t)
     {
         const juce::MidiMessageSequence* track = midiFile.getTrack(t);
@@ -1445,19 +1500,19 @@ void Timeline::drawMidiDotsInClip(juce::Graphics& g, const MidiClip& clip, juce:
         {
             double noteTime = (event.getTimeStamp() / ticksPerQuarterNote) * (60.0 / 120.0);
             float relativeX = static_cast<float>(noteTime / visualDuration);
-            
+
             if (relativeX >= 0.0f && relativeX <= 1.0f)
             {
                 float dotX = dotArea.getX() + relativeX * dotArea.getWidth();
-                
+
                 int noteNumber = event.getNoteNumber();
                 float noteY = dotArea.getY() + (1.0f - (noteNumber / 127.0f)) * dotArea.getHeight();
-                
+
                 juce::Colour dotColour = MidiDissector::getColorForDrumNote(noteNumber);
-                
+
                 float velocity = event.getVelocity() / 127.0f;
                 float dotSize = 2.0f + velocity * 4.0f;
-                
+
                 g.setColour(dotColour.withAlpha(0.6f + velocity * 0.4f));
                 g.fillEllipse(dotX - dotSize * 0.5f, noteY - dotSize * 0.5f, dotSize, dotSize);
             }
@@ -1587,14 +1642,14 @@ void Timeline::handleMidiFileDrop(const juce::StringArray& parts, double dropTim
     newClip.name = parts[0];
     newClip.startTime = dropTime;
     newClip.colour = ColourPalette::primaryBlue.withAlpha(0.7f);
-    
+
     // Set referenceBPM to current track BPM when clip is dropped
     double trackBPM = getTrackBPM();
     newClip.referenceBPM = trackBPM;  // Store the BPM at time of drop
     newClip.duration = 4.0 * (120.0 / trackBPM);
 
     newClip.file = juce::File(parts[1]);
-    
+
     if (!newClip.file.existsAsFile())
         return;
 
@@ -1616,7 +1671,7 @@ void Timeline::handleDrumPartDrop(const juce::StringArray& parts, double dropTim
         return;
 
     juce::File tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                              .getChildFile("drum_part_" + juce::String(juce::Random::getSystemRandom().nextInt()) + ".mid");
+    .getChildFile("drum_part_" + juce::String(juce::Random::getSystemRandom().nextInt()) + ".mid");
 
     if (MidiDissector::extractDrumPartToFile(sourceFile, drumNote, tempFile))
     {
@@ -1625,7 +1680,7 @@ void Timeline::handleDrumPartDrop(const juce::StringArray& parts, double dropTim
         newClip.startTime = dropTime;
         newClip.file = tempFile;
         newClip.colour = MidiDissector::getColorForDrumNote(drumNote).withAlpha(0.7f);
-        
+
         // Set referenceBPM to current track BPM when clip is dropped
         double trackBPM = getTrackBPM();
         newClip.referenceBPM = trackBPM;  // Store the BPM at time of drop

@@ -11,14 +11,6 @@ void DrumPartDragOverlay::mouseDown(const juce::MouseEvent& e)
 {
     isDragging = false;
     
-    // Create debug log
-    juce::File logFile = juce::File::getSpecialLocation(juce::File::userDesktopDirectory)
-                            .getChildFile("DrumGroovePro_DragDebug.txt");
-    
-    logFile.appendText("\n=== OVERLAY MOUSE DOWN ===\n");
-    logFile.appendText("Row: " + juce::String(row) + "\n");
-    logFile.appendText("CTRL pressed: " + juce::String(e.mods.isCtrlDown() ? "YES" : "NO") + "\n");
-    
     // Only handle CTRL clicks, pass everything else through
     if (!e.mods.isCtrlDown())
     {
@@ -29,9 +21,6 @@ void DrumPartDragOverlay::mouseDown(const juce::MouseEvent& e)
 
 void DrumPartDragOverlay::mouseDrag(const juce::MouseEvent& e)
 {
-    // Create debug log
-    juce::File logFile = juce::File::getSpecialLocation(juce::File::userDesktopDirectory)
-                            .getChildFile("DrumGroovePro_DragDebug.txt");
     
     if (e.mods.isCtrlDown())
     {
@@ -40,18 +29,13 @@ void DrumPartDragOverlay::mouseDrag(const juce::MouseEvent& e)
         {
             isDragging = true;
             
-            logFile.appendText("\n=== OVERLAY MOUSE DRAG - EXTERNAL ===\n");
-            logFile.appendText("Row: " + juce::String(row) + "\n");
-            logFile.appendText("Distance: " + juce::String(e.getDistanceFromDragStart()) + "\n");
-            
             if (parentColumn)
             {
-                logFile.appendText("Calling startExternalDrag...\n");
                 parentColumn->startExternalDrag(row);
             }
             else
             {
-                logFile.appendText("ERROR: No parent column!\n");
+
             }
         }
     }
@@ -744,16 +728,10 @@ void DrumPartsColumn::exportPartToDesktop(const DrumPart& part)
 
 void DrumPartsColumn::startExternalDrag(int row)
 {
-    // Create log file
-    juce::File logFile = juce::File::getSpecialLocation(juce::File::userDesktopDirectory)
-                            .getChildFile("DrumGroovePro_DragDebug.txt");
-    
-    logFile.appendText("\n=== START EXTERNAL DRAG ===\n");
-    logFile.appendText("Row: " + juce::String(row) + "\n");
-    
+
     if (isExternalDragActive)
     {
-        logFile.appendText("Already dragging - ignoring\n");
+
         return;
     }
     
@@ -761,19 +739,15 @@ void DrumPartsColumn::startExternalDrag(int row)
     
     if (row < 0 || row >= drumParts.size())
     {
-        logFile.appendText("ERROR: Invalid row\n");
         isExternalDragActive = false;
         return;
     }
     
     const auto& part = drumParts[row];
-    
-    logFile.appendText("Part: " + part.displayName + "\n");
-    logFile.appendText("Events: " + juce::String(part.sequence.getNumEvents()) + "\n");
+
     
     if (part.sequence.getNumEvents() == 0)
     {
-        logFile.appendText("ERROR: No MIDI events\n");
         isExternalDragActive = false;
         return;
     }
@@ -782,12 +756,10 @@ void DrumPartsColumn::startExternalDrag(int row)
     auto* dragContainer = juce::DragAndDropContainer::findParentDragContainerFor(this);
     if (!dragContainer)
     {
-        logFile.appendText("ERROR: No drag container\n");
         isExternalDragActive = false;
         return;
     }
     
-    logFile.appendText("Drag container found\n");
     
     // Create temp file
     juce::File tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
@@ -797,7 +769,6 @@ void DrumPartsColumn::startExternalDrag(int row)
 							juce::String(juce::Random::getSystemRandom().nextInt(10000));
 	juce::File tempFile = tempDir.getChildFile(uniqueName + ".mid");
     
-    logFile.appendText("Temp file: " + tempFile.getFullPathName() + "\n");
     
     // Get BPMs
     bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
@@ -824,9 +795,7 @@ void DrumPartsColumn::startExternalDrag(int row)
             }
         }
     }
-    
-    logFile.appendText("Original BPM: " + juce::String(originalBPM, 2) + "\n");
-    logFile.appendText("Current BPM: " + juce::String(currentBPM, 2) + "\n");
+
     
     // Create MIDI file
     juce::MidiFile midiFile;
@@ -855,22 +824,19 @@ void DrumPartsColumn::startExternalDrag(int row)
     track.sort();
     track.updateMatchedPairs();
     midiFile.addTrack(track);
-    
-    logFile.appendText("Writing MIDI file...\n");
+
     
     // Write file
     {
         juce::FileOutputStream outputStream(tempFile);
         if (!outputStream.openedOk())
         {
-            logFile.appendText("ERROR: Failed to open output stream\n");
             isExternalDragActive = false;
             return;
         }
         
         if (!midiFile.writeTo(outputStream))
         {
-            logFile.appendText("ERROR: Failed to write MIDI\n");
             isExternalDragActive = false;
             return;
         }
@@ -882,7 +848,6 @@ void DrumPartsColumn::startExternalDrag(int row)
     
     if (!tempFile.existsAsFile())
     {
-        logFile.appendText("ERROR: File doesn't exist\n");
         isExternalDragActive = false;
         return;
     }
@@ -890,12 +855,10 @@ void DrumPartsColumn::startExternalDrag(int row)
     juce::int64 fileSize = tempFile.getSize();
     if (fileSize == 0)
     {
-        logFile.appendText("ERROR: File is empty\n");
         isExternalDragActive = false;
         return;
     }
     
-    logFile.appendText("SUCCESS: File created (" + juce::String(fileSize) + " bytes)\n");
     
     // Cleanup old file - try multiple times if locked
 	if (lastTempFile.existsAsFile())
@@ -913,15 +876,13 @@ void DrumPartsColumn::startExternalDrag(int row)
     juce::StringArray files;
     files.add(tempFile.getFullPathName());
     
-    logFile.appendText("Calling performExternalDragDropOfFiles...\n");
     
-    dragContainer->performExternalDragDropOfFiles(files, true, this, [this, tempFile, logFile]()
+    dragContainer->performExternalDragDropOfFiles(files, true, this, [this, tempFile]()
 	{
-		logFile.appendText("=== DRAG COMPLETED ===\n");
 		isExternalDragActive = false;
 		
 		// Wait longer and try multiple times to delete
-		juce::Timer::callAfterDelay(5000, [tempFile, logFile]()
+		juce::Timer::callAfterDelay(5000, [tempFile]()
 		{
 			if (tempFile.existsAsFile())
 			{
@@ -929,7 +890,6 @@ void DrumPartsColumn::startExternalDrag(int row)
 				{
 					if (tempFile.deleteFile())
 					{
-						logFile.appendText("Temp file deleted successfully\n");
 						break;
 					}
 					juce::Thread::sleep(200);
@@ -938,5 +898,4 @@ void DrumPartsColumn::startExternalDrag(int row)
 		});
 	});
     
-    logFile.appendText("Drag initiated!\n");
 }

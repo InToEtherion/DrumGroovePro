@@ -5,6 +5,10 @@
 #include "../../Core/MidiDissector.h"
 #include <deque>
 
+#if JUCE_LINUX
+#include <juce_opengl/juce_opengl.h>
+#endif
+
 struct MidiClip
 {
     juce::String name;
@@ -12,7 +16,7 @@ struct MidiClip
     double startTime = 0.0;
     double duration = 4.0;
     double originalBPM = 120.0;
-    double referenceBPM = 120.0;  // ✅ ADDED: Track BPM when clip was added (CRITICAL FIX)
+    double referenceBPM = 120.0;
     juce::Colour colour;
     bool isSelected = false;
     juce::String id = juce::Uuid().toString();
@@ -148,6 +152,14 @@ public juce::DragAndDropTarget,
                 float zoomLevel = 100.0f;
                 double viewStartTime = 0.0;
                 double gridInterval = 1.0;
+
+                // Playhead optimization for Linux
+                double lastRenderedPlayheadPosition = -1.0;
+
+                #if JUCE_LINUX
+                // OpenGL context for hardware-accelerated rendering on Linux
+                juce::OpenGLContext openGLContext;
+                #endif
 
                 // Selection state (independent from loop)
                 bool selectionValid = false;
