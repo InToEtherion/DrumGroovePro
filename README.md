@@ -70,7 +70,12 @@ DrumGroovePro MIDI drum groove workstation designed for producers, composers, an
 - **Storage**: 50 MB for plugin installation
 - **DAW**: Any VST3-compatible host (Reaper, FL Studio, Ableton Live, Cubase, Studio One, etc.)
 
-
+### Linux
+- **OS**: Tested on Arch Linu and Fedora (64-bit)
+- **CPU**: Intel Core i5 / AMD Ryzen 5 or better
+- **RAM**: 4 GB minimum, 8 GB recommended
+- **Storage**: 50 MB for plugin installation
+- **DAW**: Any VST3-compatible host (Reaper, Ardour, Carla, etc)
 ---
 
 ##  Installation
@@ -93,6 +98,24 @@ DrumGroovePro MIDI drum groove workstation designed for producers, composers, an
 
 5. **Load** DrumGroovePro as a MIDI effect on any track
 
+
+### Quick Install (Linux)
+
+1. **Download** the latest release from the [Releases page](https://github.com/InToEtherion/DrumGroovePro/releases)
+
+2. **Extract** the ZIP file:
+   ```
+   DrumGroovePro_vX.X.X_Linux_x64.zip
+   ```
+
+3. **Copy** `DrumGroovePro.vst3` to your VST3 folder:
+   ```
+   ~/.vst3/
+   ```
+
+4. **Restart** your DAW and scan for new plugins
+
+5. **Load** DrumGroovePro as a MIDI effect on any track
 ---
 
 ##  Quick Start Guide
@@ -181,12 +204,27 @@ The plugin will scan all MIDI files in that folder and its subfolders.
 
 ## Building from Source
 
-### Prerequisites
+### Prerequisites 
 
 - **CMake** 3.22 or higher
 - **Visual Studio 2022** (Windows)
 - **JUCE** 8+ (included as submodule)
 - **Git**
+
+- For Fedora:
+sudo dnf install -y \
+    fontconfig-devel \
+    freetype-devel \
+    harfbuzz-devel \
+    cairo-devel \
+    pango-devel \
+    libX11-devel \
+    libXext-devel \
+    libXinerama-devel \
+    libXrandr-devel \
+    libXcursor-devel \
+    alsa-lib-devel \
+    jack-audio-connection-kit-devel
 
 ### Build Steps
 
