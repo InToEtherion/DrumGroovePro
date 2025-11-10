@@ -87,6 +87,14 @@ DrumGroovePro MIDI drum groove workstation designed for producers, composers, an
 - **RAM**: 4 GB minimum, 8 GB recommended
 - **Storage**: 50 MB for plugin installation
 - **DAW**: Any VST3-compatible host (Reaper, Ardour, Carla, etc)
+
+### macOS
+
+- **OS**: 10.13 High Sierra or later
+- **CPU**: Intel Core i5 or Apple Silicon (M1/M2/M3)
+- **RAM**: 4 GB minimum, 8 GB recommended
+- **Storage**: 50 MB for plugin
+- **DAW**: Any VST3-compatible host  (Logic Pro, Reaper, Ableton Live, etc)
 ---
 
 ##  Installation
