@@ -63,7 +63,7 @@ DrumGroovePro MIDI drum groove workstation designed for producers, composers, an
  -  Damage2
  -  Triaz
  -  MODO Drum
- -  
+  
 **Seamless Conversion**: Drag a Superior Drummer groove onto a track set to EZdrummer—notes are automatically remapped.
 
 ###  **Project Management**
@@ -136,6 +136,24 @@ DrumGroovePro MIDI drum groove workstation designed for producers, composers, an
 4. **Restart** your DAW and scan for new plugins
 
 5. **Load** DrumGroovePro as a MIDI effect on any track
+
+### Quick Install (MacOS)
+
+1. **Download** the latest release from the [Releases page](https://github.com/InToEtherion/DrumGroovePro/releases)
+
+2. **Extract** the ZIP file:
+   ```
+   DrumGroovePro_vX.X.X_MACOS_x64.zip
+   ```
+3. **Copy** `DrumGroovePro.vst3` to your VST3 folder:
+   ```
+   ~/Library/Audio/Plug-Ins/VST3/
+   ```
+
+4. **Restart** your DAW and scan for new plugins
+
+5. **Load** DrumGroovePro as a MIDI effect on any track
+
 ---
 
 ##  Quick Start Guide
