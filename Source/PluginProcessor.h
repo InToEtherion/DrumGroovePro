@@ -9,13 +9,14 @@
 class MultiTrackContainer;
 
 class DrumGrooveProcessor : public juce::AudioProcessor,
-public juce::ValueTree::Listener
+public juce::ValueTree::Listener,
+    public juce::AudioProcessorValueTreeState::Listener
 {
 public:
     DrumGrooveProcessor();
     ~DrumGrooveProcessor() override;
-	
-	FavoritesManager favoritesManager;
+
+    FavoritesManager favoritesManager;
 
     void prepareToPlay(double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
@@ -114,6 +115,26 @@ public:
         }
     }
 
+    // Visual latency offset access (in milliseconds)
+    float getVisualLatencyOffset() const
+    {
+        return static_cast<float>(midiProcessor.getVisualLatencyOffsetMs());
+    }
+
+    void setVisualLatencyOffset(float milliseconds)
+    {
+        // Only allow negative values (0 to -200)
+        milliseconds = juce::jlimit(-200.0f, 0.0f, milliseconds);
+
+        if (auto* param = parameters.getRawParameterValue("visualLatencyOffset"))
+        {
+            param->store(milliseconds);
+        }
+
+        midiProcessor.setVisualLatencyOffset(milliseconds);
+    }
+
+
     // Sync settings access
     bool isSyncToHost() const
     {
@@ -134,7 +155,7 @@ public:
         juce::String currentBrowserFolder;
         juce::StringArray browserNavigationPath;
         juce::String selectedFile;
-        int editorWidth = 1300;
+        int editorWidth = 1400;
         int editorHeight = 900;
         int editorX = -1;
         int editorY = -1;
@@ -143,7 +164,7 @@ public:
     // GUI state access methods
     GuiState getGuiState() const;
     void setGuiState(const GuiState& state);
-    
+
     // Complete GUI state persistence - production requirement
     void saveCompleteGuiState();
     void saveCompleteGuiState(class MultiTrackContainer* container);
@@ -154,11 +175,14 @@ public:
     // ValueTree::Listener override for state changes
     void valueTreePropertyChanged(juce::ValueTree& treeWhosePropertyHasChanged,
                                   const juce::Identifier& property) override;
-	
-	juce::ValueTree& getGuiStateTree() { return guiStateTree; }
-    const juce::ValueTree& getGuiStateTree() const { return guiStateTree; }
+
+                                  juce::ValueTree& getGuiStateTree() { return guiStateTree; }
+                                  const juce::ValueTree& getGuiStateTree() const { return guiStateTree; }
 private:
     static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    // AudioProcessorValueTreeState::Listener implementation
+    void parameterChanged(const juce::String& parameterID, float newValue) override;
 
     // Internal GUI state storage in ValueTree
     juce::ValueTree guiStateTree { "GuiState" };

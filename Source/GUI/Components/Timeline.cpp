@@ -842,6 +842,7 @@ void Timeline::play()
 
     playing = true;
     lastRenderedPlayheadPosition = playheadPosition;  // Initialize for smooth animation
+
     startHighPrecisionTimer();
 }
 
@@ -1152,12 +1153,9 @@ void Timeline::startHighPrecisionTimer()
     lastPlaybackTime = juce::Time::getMillisecondCounterHiRes() / 1000.0;
 
     #if JUCE_LINUX
-    // On Linux, use very high refresh rate (240Hz) for smoother playhead animation
-    // Linux compositors batch repaints aggressively, so we flood with updates
-    startTimer(4);  // ~240 FPS - compositor will throttle to screen refresh
+    startTimer(4);
     #else
-    // Windows/Mac: 60 FPS is sufficient
-    startTimer(16);  // ~60 FPS
+    startTimer(16);
     #endif
 }
 
@@ -1165,19 +1163,23 @@ void Timeline::timerCallback()
 {
     if (playing)
     {
-        // Ã¢Å“â€¦ CRITICAL FIX: ONLY read playhead position from audio processor
-        // DO NOT write it back! Audio thread is the single source of truth.
-        // Writing to playheadPosition from message thread causes data race and note skipping.
-        playheadPosition = processor.midiProcessor.getPlayheadPosition();
+        // CRITICAL FIX: Read the VISUAL playhead position (with configurable delay)
+        // Audio continues normally, but visual display lags by configurable amount for better sync perception
+        playheadPosition = processor.midiProcessor.getVisualPlayheadPosition();
 
-        // Ã¢ÂÅ’ REMOVED: DO NOT call syncPlayheadPosition here!
+        // REMOVED: DO NOT call syncPlayheadPosition here!
         // It writes to playheadPosition, causing data race with audio thread
 
         // Handle loop restart (this IS an intentional seek, so setPlayheadPosition is OK)
         if (loopEnabled && selectionValid && playheadPosition >= selectionEnd)
         {
-            playheadPosition = selectionStart;
-            processor.midiProcessor.setPlayheadPosition(selectionStart);
+            // CRITICAL: Check the ACTUAL audio playhead, not the visual one
+            double actualPlayhead = processor.midiProcessor.getPlayheadPosition();
+            if (actualPlayhead >= selectionEnd)
+            {
+                processor.midiProcessor.setPlayheadPosition(selectionStart);
+                // Visual will catch up with the configurable delay automatically
+            }
         }
 
         // Handle reaching end

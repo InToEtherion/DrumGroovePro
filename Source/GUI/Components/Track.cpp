@@ -6,9 +6,168 @@
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 #include "../LookAndFeel/ColourPalette.h"
 
-Track::Track(DrumGrooveProcessor& p, MultiTrackContainer& c, int trackNum)
-    : processor(p), container(c), trackNumber(trackNum)
+// ===== UNDO/REDO COMMAND CLASSES =====
+class TrackAddClipCommand : public TrackCommand
 {
+public:
+    TrackAddClipCommand(Track* t, const MidiClip& c)
+    : track(t), clip(c) {}
+
+    void execute() override {
+        track->clips.push_back(std::make_unique<MidiClip>(clip));
+        track->container.updateTimelineSize();
+        track->repaint();
+    }
+
+    void undo() override {
+        track->clips.erase(
+            std::remove_if(track->clips.begin(), track->clips.end(),
+                           [this](const std::unique_ptr<MidiClip>& c) {
+                               return c->id == clip.id;
+                           }),
+                           track->clips.end());
+        track->container.updateTimelineSize();
+        track->repaint();
+    }
+
+private:
+    Track* track;
+    MidiClip clip;
+};
+
+class TrackDeleteClipsCommand : public TrackCommand
+{
+public:
+    TrackDeleteClipsCommand(Track* t, const std::vector<MidiClip>& clips)
+    : track(t), deletedClips(clips) {}
+
+    void execute() override {
+        for (const auto& clip : deletedClips) {
+            // Notify MidiProcessor to clear this clip
+            track->processor.midiProcessor.clearClip(clip.id);
+
+            track->clips.erase(
+                std::remove_if(track->clips.begin(), track->clips.end(),
+                               [&clip](const std::unique_ptr<MidiClip>& c) {
+                                   return c->id == clip.id;
+                               }),
+                               track->clips.end());
+        }
+        track->container.updateTimelineSize();
+        track->repaint();
+    }
+
+    void undo() override {
+        for (const auto& clip : deletedClips) {
+            track->clips.push_back(std::make_unique<MidiClip>(clip));
+        }
+        track->container.updateTimelineSize();
+        track->repaint();
+    }
+
+private:
+    Track* track;
+    std::vector<MidiClip> deletedClips;
+};
+
+class TrackMoveClipsCommand : public TrackCommand
+{
+public:
+    TrackMoveClipsCommand(Track* t, const std::vector<std::pair<juce::String, double>>& moves)
+    : track(t), clipMoves(moves) {}
+
+    void execute() override {
+        if (oldPositions.empty()) {
+            // First execution - save old positions
+            for (const auto& [id, newTime] : clipMoves) {
+                for (auto& clip : track->clips) {
+                    if (clip->id == id) {
+                        oldPositions.push_back({id, clip->startTime});
+                        clip->startTime = newTime;
+                        break;
+                    }
+                }
+            }
+        } else {
+            // Redo - apply new positions
+            for (const auto& [id, newTime] : clipMoves) {
+                for (auto& clip : track->clips) {
+                    if (clip->id == id) {
+                        clip->startTime = newTime;
+                        break;
+                    }
+                }
+            }
+        }
+        track->repaint();
+    }
+
+    void undo() override {
+        for (const auto& [id, oldTime] : oldPositions) {
+            for (auto& clip : track->clips) {
+                if (clip->id == id) {
+                    clip->startTime = oldTime;
+                    break;
+                }
+            }
+        }
+        track->repaint();
+    }
+
+private:
+    Track* track;
+    std::vector<std::pair<juce::String, double>> clipMoves;
+    std::vector<std::pair<juce::String, double>> oldPositions;
+};
+
+class TrackResizeClipCommand : public TrackCommand
+{
+public:
+    TrackResizeClipCommand(Track* t, const juce::String& id,
+                           double oldStart, double oldDur,
+                           double newStart, double newDur)
+    : track(t), clipId(id),
+    oldStartTime(oldStart), oldDuration(oldDur),
+    newStartTime(newStart), newDuration(newDur) {}
+
+    void execute() override {
+        for (auto& clip : track->clips) {
+            if (clip->id == clipId) {
+                clip->startTime = newStartTime;
+                clip->duration = newDuration;
+                break;
+            }
+        }
+        track->repaint();
+    }
+
+    void undo() override {
+        for (auto& clip : track->clips) {
+            if (clip->id == clipId) {
+                clip->startTime = oldStartTime;
+                clip->duration = oldDuration;
+                break;
+            }
+        }
+        track->repaint();
+    }
+
+private:
+    Track* track;
+    juce::String clipId;
+    double oldStartTime;
+    double oldDuration;
+    double newStartTime;
+    double newDuration;
+};
+// ===== END UNDO/REDO COMMAND CLASSES =====
+
+
+Track::Track(DrumGrooveProcessor& p, MultiTrackContainer& c, int trackNum)
+: processor(p), container(c), trackNumber(trackNum)
+{
+    setWantsKeyboardFocus(true);
+    addKeyListener(this);
 }
 
 Track::~Track()
@@ -24,23 +183,23 @@ Track::~Track()
 void Track::paint(juce::Graphics& g)
 {
     g.fillAll(ColourPalette::secondaryBackground);
-    
+
     g.setColour(juce::Colours::red.withAlpha(0.5f));
-    g.drawLine(static_cast<float>(getWidth() - 1), 0.0f, 
+    g.drawLine(static_cast<float>(getWidth() - 1), 0.0f,
                static_cast<float>(getWidth() - 1), static_cast<float>(getHeight()), 2.0f);
-    
+
     drawClips(g);
-    
+
     if (ghostClip)
         drawGhostClip(g);
-        
+
     if (isSelecting)
         drawSelectionBox(g);
-        
+
     drawDropIndicator(g);
-    
+
     g.setColour(ColourPalette::separator);
-    g.drawLine(0.0f, static_cast<float>(getHeight() - 1), 
+    g.drawLine(0.0f, static_cast<float>(getHeight() - 1),
                static_cast<float>(getWidth()), static_cast<float>(getHeight() - 1));
 }
 
@@ -50,12 +209,15 @@ void Track::resized()
 
 void Track::mouseDown(const juce::MouseEvent& e)
 {
+    // Grab keyboard focus so Ctrl+Z works
+    grabKeyboardFocus();
+
     if (e.mods.isRightButtonDown())
     {
         showTrackContextMenu(e.getPosition());
         return;
     }
-    
+
     // CRITICAL FIX: If Ctrl+Alt is pressed, don't start internal dragging
     // This allows the parent MultiTrackContainer to handle external drag to DAW
     if (e.mods.isCtrlDown() && e.mods.isAltDown())
@@ -66,20 +228,20 @@ void Track::mouseDown(const juce::MouseEvent& e)
             // Select the clip but don't start internal dragging
             if (!e.mods.isShiftDown())
                 container.deselectAllClips();
-            
+
             clip->isSelected = true;
-            
+
             // Always trigger file path display callback when clicking a clip
             if (onClipSelected && clip->file.existsAsFile())
                 onClipSelected(clip->file);
         }
-        
+
         repaint();
         return;
     }
-    
+
     auto* clip = getClipAt(e.position);
-    
+
     if (clip)
     {
         // CRITICAL FIX: Use absolute position for resize handle detection
@@ -108,14 +270,14 @@ void Track::mouseDown(const juce::MouseEvent& e)
             {
                 container.deselectAllClips();
             }
-            
+
             clip->isSelected = !clip->isSelected;
-            
+
             if (clip->isSelected)
             {
                 isDragging = true;
                 dragStartPoint = e.position;
-                
+
                 draggedClips.clear();
                 for (const auto& c : clips)
                 {
@@ -123,12 +285,12 @@ void Track::mouseDown(const juce::MouseEvent& e)
                         draggedClips.push_back({c->id, c->startTime});
                 }
             }
-            
+
             // Always trigger file path display callback when clicking a clip
             if (onClipSelected && clip->file.existsAsFile())
                 onClipSelected(clip->file);
         }
-        
+
         repaint();
     }
     else
@@ -137,7 +299,7 @@ void Track::mouseDown(const juce::MouseEvent& e)
         {
             container.deselectAllClips();
         }
-        
+
         isSelecting = true;
         dragStartPoint = e.position;
         selectionBox = juce::Rectangle<float>();
@@ -183,7 +345,7 @@ void Track::drawMidiDotsInClip(juce::Graphics& g, const MidiClip& clip, juce::Re
 
     // Determine the actual BPM used by the clip
     double midiFileBPM = 120.0;
-    
+
     for (int t = 0; t < midiFile.getNumTracks(); ++t)
     {
         const juce::MidiMessageSequence* track = midiFile.getTrack(t);
@@ -206,7 +368,7 @@ void Track::drawMidiDotsInClip(juce::Graphics& g, const MidiClip& clip, juce::Re
     juce::MidiMessageSequence allNotes;
     int minNoteNumber = 127;
     int maxNoteNumber = 0;
-    
+
     // Collect all note events
     for (int t = 0; t < midiFile.getNumTracks(); ++t)
     {
@@ -219,7 +381,7 @@ void Track::drawMidiDotsInClip(juce::Graphics& g, const MidiClip& clip, juce::Re
                 if (eventHolder)
                 {
                     const auto& message = eventHolder->message;
-                    
+
                     if (message.isNoteOn())
                     {
                         allNotes.addEvent(message);
@@ -227,7 +389,7 @@ void Track::drawMidiDotsInClip(juce::Graphics& g, const MidiClip& clip, juce::Re
                         minNoteNumber = juce::jmin(minNoteNumber, noteNum);
                         maxNoteNumber = juce::jmax(maxNoteNumber, noteNum);
                     }
-                    
+
                     maxTimeStamp = juce::jmax(maxTimeStamp, message.getTimeStamp());
                 }
             }
@@ -244,7 +406,7 @@ void Track::drawMidiDotsInClip(juce::Graphics& g, const MidiClip& clip, juce::Re
 
     // Determine coloring strategy based on clip type
     bool isFullMidiFile = (clip.colour == ColourPalette::primaryBlue.withAlpha(0.7f));
-    
+
     // Draw note events with appropriate coloring
     for (int i = 0; i < allNotes.getNumEvents(); ++i)
     {
@@ -254,11 +416,11 @@ void Track::drawMidiDotsInClip(juce::Graphics& g, const MidiClip& clip, juce::Re
         {
             double noteTime = (event.getTimeStamp() / ticksPerQuarterNote) * (60.0 / 120.0);
             float relativeX = static_cast<float>(noteTime / visualDuration);
-            
+
             if (relativeX >= 0.0f && relativeX <= 1.0f)
             {
                 float dotX = dotArea.getX() + relativeX * dotArea.getWidth();
-                
+
                 int noteNumber = event.getNoteNumber();
                 float relativeY = 1.0f - static_cast<float>(noteNumber - minNoteNumber) / static_cast<float>(noteRange);
                 float dotY = dotArea.getY() + relativeY * dotArea.getHeight();
@@ -277,7 +439,7 @@ void Track::drawMidiDotsInClip(juce::Graphics& g, const MidiClip& clip, juce::Re
                     noteColour = clip.colour.brighter(0.3f);
                 }
                 g.setColour(noteColour);
-                
+
                 // Draw dot (size based on zoom)
                 float dotSize = juce::jmax(1.5f, juce::jmin(3.0f, dotArea.getWidth() / 100.0f));
                 g.fillEllipse(dotX - dotSize * 0.5f, dotY - dotSize * 0.5f, dotSize, dotSize);
@@ -346,7 +508,7 @@ void Track::handleMidiFileDrop(const juce::StringArray& parts, const juce::Point
     // CRITICAL: Detect source library from file path
     DrumLibrary sourceLib = DrumLibrary::Unknown;
     auto& library = processor.drumLibraryManager;
-    
+
     for (int i = 0; i < library.getNumRootFolders(); ++i)
     {
         auto rootFolder = library.getRootFolder(i);
@@ -371,7 +533,7 @@ void Track::handleMidiFileDrop(const juce::StringArray& parts, const juce::Point
                 {
                     const auto* track = tempMidiFile.getTrack(t);
                     if (!track) continue;
-                    
+
                     for (int e = 0; e < track->getNumEvents(); ++e)
                     {
                         const auto* event = track->getEventPointer(e);
@@ -393,14 +555,14 @@ void Track::handleMidiFileDrop(const juce::StringArray& parts, const juce::Point
     newClip.file = file;
     newClip.startTime = dropTime;
     newClip.colour = ColourPalette::primaryBlue.withAlpha(0.7f);
-    
+
     // FIXED: Store the MIDI file's original BPM and source library
     newClip.originalBPM = originalBPM;
     newClip.referenceBPM = originalBPM;  // Reference is the original BPM, not track BPM
     newClip.sourceLibrary = sourceLib;  // NEW: Store detected source library
-    
-    DBG("Dropped MIDI: " + filename + " - Original BPM: " + juce::String(originalBPM, 2) + 
-        ", Source Library: " + DrumLibraryManager::getLibraryName(sourceLib));
+
+    DBG("Dropped MIDI: " + filename + " - Original BPM: " + juce::String(originalBPM, 2) +
+    ", Source Library: " + DrumLibraryManager::getLibraryName(sourceLib));
 
     // Calculate duration at original BPM
     double duration = 4.0;
@@ -412,28 +574,28 @@ void Track::handleMidiFileDrop(const juce::StringArray& parts, const juce::Point
     {
         newClip.duration = 4.0;
     }
-    
+
     DBG("Clip duration: " + juce::String(duration, 3) + "s at " + juce::String(originalBPM, 2) + " BPM");
 
     clips.push_back(std::make_unique<MidiClip>(newClip));
-    
-    // Ã¢Å“â€¦ CRITICAL FIX: Add clip to MidiProcessor immediately if playing
+
+    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CRITICAL FIX: Add clip to MidiProcessor immediately if playing
     if (container.isPlaying())
     {
         double trackBPM = getTrackBPM();
         processor.midiProcessor.addMidiClip(
-            file, 
-            dropTime, 
+            file,
+            dropTime,
             sourceLib,
             originalBPM,
             trackBPM,
             trackNumber,
             newClip.duration,
-			newClip.id
+            newClip.id
         );
-        
-        DBG("Added to MidiProcessor - Original: " + juce::String(originalBPM, 2) + 
-            " BPM, Track: " + juce::String(trackBPM, 2) + " BPM");
+
+        DBG("Added to MidiProcessor - Original: " + juce::String(originalBPM, 2) +
+        " BPM, Track: " + juce::String(trackBPM, 2) + " BPM");
     }
 
     container.updateTimelineSize();
@@ -449,7 +611,7 @@ void Track::handleDrumPartDrop(const juce::StringArray& parts, const juce::Point
     juce::File originalFile(parts[2]);
     int partTypeInt = parts[3].getIntValue();
     DrumPartType partType = static_cast<DrumPartType>(partTypeInt);
-    
+
     int sourceLibInt = parts.size() >= 5 ? parts[4].getIntValue() : 0;
     DrumLibrary sourceLib = static_cast<DrumLibrary>(sourceLibInt);
 
@@ -478,7 +640,7 @@ void Track::handleDrumPartDrop(const juce::StringArray& parts, const juce::Point
                 {
                     const auto* track = tempMidiFile.getTrack(t);
                     if (!track) continue;
-                    
+
                     for (int e = 0; e < track->getNumEvents(); ++e)
                     {
                         const auto* event = track->getEventPointer(e);
@@ -499,14 +661,14 @@ void Track::handleDrumPartDrop(const juce::StringArray& parts, const juce::Point
     newClip.file = outputFile;
     newClip.startTime = dropTime;
     newClip.colour = MidiDissector::getPartColour(partType).withAlpha(0.7f);
-    
+
     // FIXED: Store the MIDI file's original BPM and source library
     newClip.originalBPM = originalBPM;
     newClip.referenceBPM = originalBPM;  // Reference is the original BPM, not track BPM
     newClip.sourceLibrary = sourceLib;  // NEW: Store source library from drum part
-    
-    DBG("Dropped drum part: " + partName + " - Original BPM: " + juce::String(originalBPM, 2) + 
-        ", Source Library: " + DrumLibraryManager::getLibraryName(sourceLib));
+
+    DBG("Dropped drum part: " + partName + " - Original BPM: " + juce::String(originalBPM, 2) +
+    ", Source Library: " + DrumLibraryManager::getLibraryName(sourceLib));
 
     double duration = 1.0;
     if (calculateMidiFileDuration(outputFile, duration))
@@ -519,45 +681,45 @@ void Track::handleDrumPartDrop(const juce::StringArray& parts, const juce::Point
     }
 
     clips.push_back(std::make_unique<MidiClip>(newClip));
-    
-    // Ã¢Å“â€¦ CRITICAL FIX: Add clip to MidiProcessor immediately if playing
+
+    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CRITICAL FIX: Add clip to MidiProcessor immediately if playing
     if (container.isPlaying())
     {
         double trackBPM = getTrackBPM();
         processor.midiProcessor.addMidiClip(
-            outputFile, 
-            dropTime, 
+            outputFile,
+            dropTime,
             sourceLib,
             originalBPM,
             trackBPM,
             trackNumber,
             newClip.duration,
-			newClip.id
+            newClip.id
         );
-        
-        DBG("Added drum part to MidiProcessor - Original: " + juce::String(originalBPM, 2) + 
-            " BPM, Track: " + juce::String(trackBPM, 2) + " BPM");
+
+        DBG("Added drum part to MidiProcessor - Original: " + juce::String(originalBPM, 2) +
+        " BPM, Track: " + juce::String(trackBPM, 2) + " BPM");
     }
 
     container.updateTimelineSize();
     repaint();
 }
 
-bool Track::createDrumPartMidiFile(const juce::File& originalFile, 
-                                   DrumPartType partType, 
+bool Track::createDrumPartMidiFile(const juce::File& originalFile,
+                                   DrumPartType partType,
                                    DrumLibrary sourceLib,
                                    juce::File& outputFile)
 {
     DBG("=== createDrumPartMidiFile ===");
     DBG("Original file: " + originalFile.getFullPathName());
     DBG("Part type: " + juce::String(static_cast<int>(partType)));
-    
+
     MidiDissector dissector;
     DrumLibrary targetLib = processor.getTargetLibrary();
 
     auto parts = dissector.dissectMidiFileWithLibraryManager(
-        originalFile, 
-        sourceLib, 
+        originalFile,
+        sourceLib,
         targetLib,
         processor.drumLibraryManager);
 
@@ -568,20 +730,20 @@ bool Track::createDrumPartMidiFile(const juce::File& originalFile,
         if (part.type == partType && part.eventCount > 0)
         {
             DBG("Found matching part: " + part.displayName + " with " + juce::String(part.eventCount) + " events");
-            
+
             outputFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                        .getChildFile("DrumGroovePro_part_" + juce::String(juce::Random::getSystemRandom().nextInt()) + ".mid");
+            .getChildFile("DrumGroovePro_part_" + juce::String(juce::Random::getSystemRandom().nextInt()) + ".mid");
 
             juce::MidiFile midiFileToSave;
             midiFileToSave.setTicksPerQuarterNote(480);
-            
+
             juce::MidiMessageSequence trackCopy;
             for (int i = 0; i < part.sequence.getNumEvents(); ++i)
             {
                 trackCopy.addEvent(part.sequence.getEventPointer(i)->message);
             }
             trackCopy.updateMatchedPairs();
-            
+
             midiFileToSave.addTrack(trackCopy);
 
             juce::FileOutputStream stream(outputFile);
@@ -589,9 +751,9 @@ bool Track::createDrumPartMidiFile(const juce::File& originalFile,
             {
                 midiFileToSave.writeTo(stream);
                 stream.flush();
-                
+
                 DBG("Temp file created: " + outputFile.getFullPathName());
-                
+
                 if (outputFile.existsAsFile() && outputFile.getSize() > 0)
                 {
                     DBG("File verified, size: " + juce::String(outputFile.getSize()));
@@ -608,7 +770,7 @@ bool Track::createDrumPartMidiFile(const juce::File& originalFile,
             }
         }
     }
-    
+
     DBG("ERROR: No matching part found or file creation failed");
     return false;
 }
@@ -633,7 +795,7 @@ bool Track::calculateMidiFileDuration(const juce::File& file, double& duration) 
     {
         const juce::MidiMessageSequence* track = midiFile.getTrack(t);
         if (!track) continue;
-        
+
         for (int e = 0; e < track->getNumEvents(); ++e)
         {
             const auto* event = track->getEventPointer(e);
@@ -665,33 +827,18 @@ bool Track::calculateMidiFileDuration(const juce::File& file, double& duration) 
     return duration > 0;
 }
 
-void Track::addClip(const MidiClip& clip)
-{
-    auto newClip = std::make_unique<MidiClip>(clip);
-    
-    // Deselect all other clips
-    for (auto& c : clips)
-        c->isSelected = false;
-    
-    newClip->isSelected = true;
-    clips.push_back(std::move(newClip));
-    
-    container.updateTimelineSize();
-    repaint();
-}
-
 double Track::pixelsToTime(float pixels) const
 {
     // Convert from local track pixels to global container pixels
     float globalX = pixels + container.getViewportX();
-    
+
     // Use track-specific visual scale factor with precision handling
     double scaleFactor = getVisualScaleFactor();
     double zoomLevel = container.getZoom();
-    
+
     // Ensure minimum precision to avoid floating point errors at high BPM
     double effectiveZoom = juce::jmax(0.001, zoomLevel * scaleFactor);
-    
+
     return globalX / effectiveZoom;
 }
 
@@ -700,12 +847,12 @@ float Track::timeToPixels(double time) const
     // Use track-specific visual scale factor with precision handling
     double scaleFactor = getVisualScaleFactor();
     double zoomLevel = container.getZoom();
-    
+
     // Ensure minimum precision to avoid floating point errors at high BPM
     double effectiveZoom = juce::jmax(0.001, zoomLevel * scaleFactor);
-    
+
     float globalX = static_cast<float>(time * effectiveZoom);
-    
+
     // Convert from global container pixels to local track pixels
     return globalX - container.getViewportX();
 }
@@ -751,25 +898,25 @@ double Track::getTrackBPM() const
 void Track::showTrackContextMenu(const juce::Point<int>& position)
 {
     juce::PopupMenu menu;
-    
+
     menu.addItem(1, "Clear All Clips", !clips.empty());
     menu.addSeparator();
     menu.addItem(2, "Select All Clips", !clips.empty());
     menu.addItem(3, "Delete Selected Clips", !getSelectedClips().empty());
-    
+
     // Convert local position to screen coordinates for proper menu placement
     auto screenPos = localPointToGlobal(position);
-    
+
     menu.showMenuAsync(juce::PopupMenu::Options()
-        .withTargetScreenArea(juce::Rectangle<int>(screenPos.x, screenPos.y, 1, 1)),
-        [this](int result) {
-            switch (result)
-            {
-                case 1: clearAllClips(); break;
-                case 2: selectAll(); break;
-                case 3: removeSelectedClips(); break;
-            }
-        });
+    .withTargetScreenArea(juce::Rectangle<int>(screenPos.x, screenPos.y, 1, 1)),
+                       [this](int result) {
+                           switch (result)
+                           {
+                               case 1: clearAllClips(); break;
+                               case 2: selectAll(); break;
+                               case 3: removeSelectedClips(); break;
+                           }
+                       });
 }
 
 MidiClip* Track::getClipAt(const juce::Point<float>& point)
@@ -804,28 +951,6 @@ std::vector<MidiClip*> Track::getSelectedClips()
     return selected;
 }
 
-void Track::removeSelectedClips()
-{
-    // First, notify MidiProcessor to clear these clips
-    for (const auto& clip : clips)
-    {
-        if (clip->isSelected)
-        {
-            processor.midiProcessor.clearClip(clip->id);
-            DBG("Removed clip from MidiProcessor: " + clip->id);
-        }
-    }
-    
-    // Then remove from GUI
-    clips.erase(
-        std::remove_if(clips.begin(), clips.end(),
-            [](const std::unique_ptr<MidiClip>& clip) { return clip->isSelected; }),
-        clips.end());
-    
-    container.updateTimelineSize();
-    repaint();
-}
-
 void Track::selectAll()
 {
     for (auto& clip : clips)
@@ -840,24 +965,9 @@ void Track::deselectAll()
     repaint();
 }
 
-void Track::clearAllClips()
-{
-    // First, notify MidiProcessor to clear all clips from this track
-    for (const auto& clip : clips)
-    {
-        processor.midiProcessor.clearClip(clip->id);
-        DBG("Cleared clip from MidiProcessor: " + clip->id);
-    }
-    
-    // Then clear from GUI
-    clips.clear();
-    container.updateTimelineSize();
-    repaint();
-}
-
 void Track::mouseDrag(const juce::MouseEvent& e)
 {
-	//  CTRL+ALT drag = External drag to DAW with track BPM
+    //  CTRL+ALT drag = External drag to DAW with track BPM
     if (e.mods.isCtrlDown() && e.mods.isAltDown())
     {
         if (e.getDistanceFromDragStart() > 10 && !isExternalDragActive)
@@ -872,24 +982,24 @@ void Track::mouseDrag(const juce::MouseEvent& e)
         }
         return;  // Don't process other drag logic when CTRL+ALT is pressed
     }
-	
+
     if (isResizing && resizingClip)
     {
         float mouseX = static_cast<float>(e.position.x);
         float clipStartX = static_cast<float>(resizingClip->startTime * container.getZoom());
         float newWidth = mouseX - clipStartX;
-        
+
         double trackBPM = getTrackBPM();
         double visualScaleFactor = resizingClip->referenceBPM / trackBPM;
-        
+
         double newDuration = (newWidth / container.getZoom()) / visualScaleFactor;
         newDuration = juce::jmax(0.1, newDuration);
-        
+
         if (!e.mods.isAltDown())
             newDuration = container.snapToGrid(newDuration);
-        
+
         resizingClip->duration = newDuration;
-        
+
         if (container.isPlaying())
         {
             processor.midiProcessor.updateClipBoundaries(
@@ -897,49 +1007,49 @@ void Track::mouseDrag(const juce::MouseEvent& e)
                 resizingClip->startTime,
                 resizingClip->duration
             );
-            
+
             DBG("Updated clip duration in real-time: " + resizingClip->name);
         }
-        
+
         repaint();
     }
     else if (isResizingLeft && resizingClip)
     {
         float mouseX = static_cast<float>(e.position.x);
         double newStartTime = mouseX / container.getZoom();
-        
+
         if (!e.mods.isAltDown())
             newStartTime = container.snapToGrid(newStartTime);
-        
+
         double endTime = resizeStartTime + resizeStartDuration;
         newStartTime = juce::jmin(newStartTime, endTime - 0.1);
         newStartTime = juce::jmax(0.0, newStartTime);
-        
+
         resizingClip->startTime = newStartTime;
         resizingClip->duration = endTime - newStartTime;
-        
+
         if (container.isPlaying())
         {
             double trackBPM = getTrackBPM();
             double visualScaleFactor = resizingClip->referenceBPM / trackBPM;
             double visualDuration = resizingClip->duration * visualScaleFactor;
-            
+
             processor.midiProcessor.updateClipBoundaries(
                 resizingClip->id,
                 resizingClip->startTime,
                 resizingClip->duration
             );
-            
+
             DBG("Updated clip position in real-time: " + resizingClip->name);
         }
-        
+
         repaint();
     }
     else if (isDragging && !draggedClips.empty())
     {
         float deltaX = e.position.x - dragStartPoint.x;
         double deltaTime = deltaX / container.getZoom();
-        
+
         for (auto& clip : clips)
         {
             if (clip->isSelected)
@@ -949,13 +1059,13 @@ void Track::mouseDrag(const juce::MouseEvent& e)
                     if (id == clip->id)
                     {
                         double newTime = originalTime + deltaTime;
-                        
+
                         if (!e.mods.isAltDown())
                             newTime = container.snapToGrid(newTime);
-                        
+
                         newTime = juce::jmax(0.0, newTime);
                         clip->startTime = newTime;
-                        
+
                         if (container.isPlaying())
                         {
                             processor.midiProcessor.updateClipBoundaries(
@@ -964,7 +1074,7 @@ void Track::mouseDrag(const juce::MouseEvent& e)
                                 clip->duration
                             );
                         }
-                        
+
                         break;
                     }
                 }
@@ -983,7 +1093,7 @@ void Track::mouseDrag(const juce::MouseEvent& e)
             double trackBPM = getTrackBPM();
             double visualScaleFactor = clip->referenceBPM / trackBPM;
             float clipWidth = static_cast<float>(clip->duration * container.getZoom() * visualScaleFactor);
-            
+
             juce::Rectangle<float> clipBounds(clipX, 10.0f, clipWidth, TRACK_HEIGHT - 20.0f);
 
             if (selectionBox.intersects(clipBounds))
@@ -991,15 +1101,81 @@ void Track::mouseDrag(const juce::MouseEvent& e)
             else if (!e.mods.isShiftDown())
                 clip->isSelected = false;
         }
-        
+
         repaint();
     }
 }
 
 void Track::mouseUp(const juce::MouseEvent& e)
-{	
-	isExternalDragging = false;
-    if (isDragging)
+{
+    isExternalDragging = false;
+
+    // Record undo for resizing (right handle)
+    if (isResizing && resizingClip)
+    {
+        resizingClip->duration = juce::jmax(0.1, resizingClip->duration);
+        resizingClip->duration = snapToGrid(resizingClip->duration);
+
+        // Check if duration actually changed
+        if (std::abs(resizingClip->duration - resizeStartDuration) > 0.001)
+        {
+            addUndoCommand(std::make_unique<TrackResizeClipCommand>(
+                this, resizingClip->id,
+                resizingClip->startTime, resizeStartDuration,  // old values
+                resizingClip->startTime, resizingClip->duration),  // new values
+                false);  // Don't execute - already applied during drag
+        }
+
+        // Update MidiProcessor
+        if (container.isPlaying())
+        {
+            processor.midiProcessor.updateClipBoundaries(
+                resizingClip->id,
+                resizingClip->startTime,
+                resizingClip->duration
+            );
+            DBG("Updated clip duration in real-time: " + resizingClip->name);
+        }
+
+        isResizing = false;
+        resizingClip = nullptr;
+    }
+    // Record undo for resizing (left handle - changes both position and duration)
+    else if (isResizingLeft && resizingClip)
+    {
+        resizingClip->startTime = juce::jmax(0.0, resizingClip->startTime);
+        resizingClip->duration = juce::jmax(0.1, resizingClip->duration);
+
+        resizingClip->startTime = snapToGrid(resizingClip->startTime);
+        resizingClip->duration = snapToGrid(resizingClip->duration);
+
+        // Check if position or duration actually changed
+        if (std::abs(resizingClip->startTime - resizeStartTime) > 0.001 ||
+            std::abs(resizingClip->duration - resizeStartDuration) > 0.001)
+        {
+            addUndoCommand(std::make_unique<TrackResizeClipCommand>(
+                this, resizingClip->id,
+                resizeStartTime, resizeStartDuration,  // old values
+                resizingClip->startTime, resizingClip->duration),  // new values
+                false);  // Don't execute - already applied during drag
+        }
+
+        // Update MidiProcessor
+        if (container.isPlaying())
+        {
+            processor.midiProcessor.updateClipBoundaries(
+                resizingClip->id,
+                resizingClip->startTime,
+                resizingClip->duration
+            );
+            DBG("Updated clip left resize in real-time: " + resizingClip->name);
+        }
+
+        isResizingLeft = false;
+        resizingClip = nullptr;
+    }
+    // Record undo for moving clips
+    else if (isDragging && !draggedClips.empty())
     {
         // Snap final positions
         for (auto& clip : clips)
@@ -1007,77 +1183,61 @@ void Track::mouseUp(const juce::MouseEvent& e)
             if (clip->isSelected)
             {
                 clip->startTime = snapToGrid(clip->startTime);
-                
-                // Update MidiProcessor 
-                
+
+                // Update MidiProcessor if playing
+                if (container.isPlaying())
                 {
                     double trackBPM = getTrackBPM();
-                    double visualScaleFactor = clip->referenceBPM / trackBPM;
-                    double visualDuration = clip->duration * visualScaleFactor;
-                    
                     processor.midiProcessor.updateClipBoundaries(
                         clip->id,
                         clip->startTime,
-                        clip->duration  // Pass original duration, not visual
+                        clip->duration
                     );
-                    
                     DBG("Updated clip position in real-time: " + clip->name);
                 }
             }
         }
-    }
-    
-    if (isResizing && resizingClip)
-    {
-        resizingClip->duration = juce::jmax(0.1, resizingClip->duration);
-        resizingClip->duration = snapToGrid(resizingClip->duration);
-        
-        // Update MidiProcessor
-        
+
+        // Check if any clips actually moved
+        std::vector<std::pair<juce::String, double>> finalPositions;
+        bool moved = false;
+
+        for (const auto& clip : clips)
         {
-            processor.midiProcessor.updateClipBoundaries(
-                resizingClip->id,
-                resizingClip->startTime,
-                resizingClip->duration
-            );
-            
-            DBG("Updated clip duration in real-time: " + resizingClip->name);
+            if (clip->isSelected)
+            {
+                for (const auto& [id, originalTime] : draggedClips)
+                {
+                    if (id == clip->id && std::abs(clip->startTime - originalTime) > 0.001)
+                    {
+                        finalPositions.push_back({id, clip->startTime});
+                        moved = true;
+                        break;
+                    }
+                }
+            }
         }
-    }
-    
-    if (isResizingLeft && resizingClip)
-    {
-        resizingClip->startTime = juce::jmax(0.0, resizingClip->startTime);
-        resizingClip->duration = juce::jmax(0.1, resizingClip->duration);
-        
-        resizingClip->startTime = snapToGrid(resizingClip->startTime);
-        resizingClip->duration = snapToGrid(resizingClip->duration);
-        
-        // Update MidiProcessor 
-        
+
+        if (moved)
         {
-            processor.midiProcessor.updateClipBoundaries(
-                resizingClip->id,
-                resizingClip->startTime,
-                resizingClip->duration
-            );
-            
-            DBG("Updated clip left resize in real-time: " + resizingClip->name);
+            addUndoCommand(std::make_unique<TrackMoveClipsCommand>(this, finalPositions), false);  // Don't execute - already applied
         }
+
+        isDragging = false;
+        draggedClips.clear();
     }
-    
     // Handle track-to-track drag
-    if (isDragging && !draggedClips.empty())
+    else if (!draggedClips.empty())
     {
         juce::Point<int> screenPos = e.getScreenPosition();
         juce::Point<int> containerPoint = container.getLocalPoint(nullptr, screenPos);
-        
+
         int rulerHeight = 30;
         int trackHeight = 80;
         int targetTrackIndex = (containerPoint.y - rulerHeight) / trackHeight;
-        
-        if (targetTrackIndex >= 0 && 
-            targetTrackIndex < container.getNumTracks() && 
+
+        if (targetTrackIndex >= 0 &&
+            targetTrackIndex < container.getNumTracks() &&
             targetTrackIndex != (trackNumber - 1))
         {
             Track* targetTrack = container.getTrack(targetTrackIndex);
@@ -1088,12 +1248,13 @@ void Track::mouseUp(const juce::MouseEvent& e)
             }
         }
     }
-    
+
+    // Clean up all drag states
     isDragging = false;
     isResizing = false;
     isResizingLeft = false;
     isSelecting = false;
-	isExternalDragging = false; 
+    isExternalDragging = false;
     resizingClip = nullptr;
     draggedClips.clear();
     selectionBox = juce::Rectangle<float>();
@@ -1117,7 +1278,7 @@ void Track::mouseMove(const juce::MouseEvent& e)
         float clipWidth = static_cast<float>(clip->duration * container.getZoom() * visualScaleFactor);
         float clipEndX = clipX + clipWidth;
 
-        if (std::abs(e.position.x - clipEndX) < RESIZE_HANDLE_WIDTH || 
+        if (std::abs(e.position.x - clipEndX) < RESIZE_HANDLE_WIDTH ||
             std::abs(e.position.x - clipX) < RESIZE_HANDLE_WIDTH)
         {
             setMouseCursor(juce::MouseCursor::LeftRightResizeCursor);
@@ -1147,15 +1308,15 @@ void Track::itemDragEnter(const SourceDetails& details)
     ghostClip = std::make_unique<MidiClip>();
     ghostClip->name = details.description.toString();
     ghostClip->startTime = 0;
-    
+
     juce::String description = details.description.toString();
     juce::StringArray parts = juce::StringArray::fromTokens(description, "|", "");
-    
+
     double baseDuration = 4.0;
-    
+
     if (parts.size() >= 2 && parts[1] == "PART")
     {
-        baseDuration = 1.0; 
+        baseDuration = 1.0;
     }
     else if (parts.size() >= 2)
     {
@@ -1166,16 +1327,16 @@ void Track::itemDragEnter(const SourceDetails& details)
                 baseDuration = 4.0;
         }
     }
-    
+
     ghostClip->originalBPM = 120.0;
     ghostClip->duration = baseDuration;
-    
+
     adjustGhostClipToTrackBPM();
-    
+
     ghostClip->colour = ColourPalette::primaryBlue.withAlpha(0.3f);
 
-    DBG("Ghost clip entered track " + juce::String(trackNumber) + 
-        " - Duration: " + juce::String(ghostClip->duration, 3) + "s");
+    DBG("Ghost clip entered track " + juce::String(trackNumber) +
+    " - Duration: " + juce::String(ghostClip->duration, 3) + "s");
 
     repaint();
 }
@@ -1190,13 +1351,13 @@ void Track::itemDragMove(const SourceDetails& details)
             float globalMouseX = static_cast<float>(details.localPosition.x + container.getViewportX());
             double mouseTime = container.pixelsToTime(globalMouseX);
             double snappedMouseTime = snapToGrid(mouseTime);
-            
+
             dropIndicatorX = container.timeToPixels(snappedMouseTime);
             ghostClip->startTime = snappedMouseTime;
-            
-            DBG("Drag move - Mouse time: " + juce::String(mouseTime, 3) + 
-                ", Snapped: " + juce::String(snappedMouseTime, 3) +
-                ", Ghost & Drop indicator at: " + juce::String(snappedMouseTime, 3));
+
+            DBG("Drag move - Mouse time: " + juce::String(mouseTime, 3) +
+            ", Snapped: " + juce::String(snappedMouseTime, 3) +
+            ", Ghost & Drop indicator at: " + juce::String(snappedMouseTime, 3));
         }
         else
         {
@@ -1215,22 +1376,22 @@ double Track::getBPMFromMidiFile(const juce::File& file) const
 {
     if (!file.existsAsFile())
         return 120.0;
-        
+
     juce::FileInputStream inputStream(file);
     if (!inputStream.openedOk())
         return 120.0;
-        
+
     juce::MidiFile midiFile;
     if (!midiFile.readFrom(inputStream))
         return 120.0;
-    
+
     // Read BPM from tempo events
     double bpm = 120.0;
     for (int t = 0; t < midiFile.getNumTracks(); ++t)
     {
         const auto* track = midiFile.getTrack(t);
         if (!track) continue;
-        
+
         for (int e = 0; e < track->getNumEvents(); ++e)
         {
             const auto* event = track->getEventPointer(e);
@@ -1242,7 +1403,7 @@ double Track::getBPMFromMidiFile(const juce::File& file) const
         }
         if (bpm != 120.0) break;
     }
-    
+
     return bpm;
 }
 
@@ -1259,26 +1420,26 @@ void Track::drawClips(juce::Graphics& g)
 {
     double trackBPM = getTrackBPM();
     float zoom = container.getZoom();
-    
+
     for (const auto& clip : clips)
     {
         // CRITICAL FIX: Track is INSIDE TimelineContent (the scrollable content)
         // So we draw at ABSOLUTE positions, NOT relative to viewport
         // The viewport scrolling is handled by JUCE automatically
-        
+
         // Calculate absolute pixel position in timeline content
         float clipX = static_cast<float>(clip->startTime * zoom);
-        
+
         // Calculate visual scale factor for this specific clip
         double visualScaleFactor = clip->referenceBPM / trackBPM;
-        
+
         // Calculate width with BPM scaling
         float width = static_cast<float>(clip->duration * zoom * visualScaleFactor);
-        
+
         // Skip if clip is completely outside track bounds
         if (clipX + width < 0 || clipX > getWidth())
             continue;
-        
+
         // Ensure minimum width for visibility
         width = juce::jmax(2.0f, width);
 
@@ -1297,7 +1458,7 @@ void Track::drawClips(juce::Graphics& g)
         {
             g.setColour(ColourPalette::primaryBlue.withAlpha(0.3f));
             g.fillRoundedRectangle(clipBounds, 4.0f);
-            
+
             g.setColour(ColourPalette::primaryBlue);
             g.drawRoundedRectangle(clipBounds, 4.0f, 2.0f);
         }
@@ -1309,15 +1470,15 @@ void Track::drawClips(juce::Graphics& g)
 
         // Draw MIDI dots
         drawMidiDotsInClip(g, *clip, clipBounds);
-		
+
         // Draw clip name
         if (clipBounds.getWidth() > 40)
         {
             auto& lnf = DrumGrooveLookAndFeel::getInstance();
             g.setFont(lnf.getSmallFont().withHeight(11.0f));
             g.setColour(juce::Colours::white.withAlpha(0.9f));
-            g.drawText(clip->name, clipBounds.reduced(4.0f, 2.0f), 
-                      juce::Justification::topLeft, true);
+            g.drawText(clip->name, clipBounds.reduced(4.0f, 2.0f),
+                       juce::Justification::topLeft, true);
         }
 
         // Draw resize handles
@@ -1325,8 +1486,8 @@ void Track::drawClips(juce::Graphics& g)
         {
             g.setColour(ColourPalette::primaryBlue);
             g.fillRect(clipBounds.getX(), clipBounds.getY(), RESIZE_HANDLE_WIDTH, clipBounds.getHeight());
-            g.fillRect(clipBounds.getRight() - RESIZE_HANDLE_WIDTH, clipBounds.getY(), 
-                      RESIZE_HANDLE_WIDTH, clipBounds.getHeight());
+            g.fillRect(clipBounds.getRight() - RESIZE_HANDLE_WIDTH, clipBounds.getY(),
+                       RESIZE_HANDLE_WIDTH, clipBounds.getHeight());
         }
     }
 }
@@ -1338,7 +1499,7 @@ void Track::drawGhostClip(juce::Graphics& g)
 
     // CRITICAL FIX: Draw at absolute position, not relative to viewport
     float clipX = static_cast<float>(ghostClip->startTime * container.getZoom());
-    
+
     double trackBPM = getTrackBPM();
     double visualScaleFactor = ghostClip->referenceBPM / trackBPM;
     float width = static_cast<float>(ghostClip->duration * container.getZoom() * visualScaleFactor);
@@ -1370,14 +1531,14 @@ void Track::drawDropIndicator(juce::Graphics& g)
     if (dropIndicatorX >= 0)
     {
         float localX = dropIndicatorX - container.getViewportX();
-        
+
         if (localX >= 0 && localX <= getWidth())
         {
             g.setColour(juce::Colour(0xff64c864));
             g.drawLine(localX, 0.0f, localX, static_cast<float>(getHeight()), 2.0f);
-            
-            DBG("Drawing drop indicator at local X: " + juce::String(localX) + 
-                " (global: " + juce::String(dropIndicatorX) + ")");
+
+            DBG("Drawing drop indicator at local X: " + juce::String(localX) +
+            " (global: " + juce::String(dropIndicatorX) + ")");
         }
     }
 }
@@ -1388,12 +1549,12 @@ void Track::adjustGhostClipToTrackBPM()
 {
     if (!ghostClip)
         return;
-        
+
     double trackBPM = getTrackBPM();
     ghostClip->duration = ghostClip->duration * (120.0 / trackBPM);
-    
-    DBG("Adjusted ghost clip to track BPM " + juce::String(trackBPM, 2) + 
-        ": duration = " + juce::String(ghostClip->duration, 3) + "s");
+
+    DBG("Adjusted ghost clip to track BPM " + juce::String(trackBPM, 2) +
+    ": duration = " + juce::String(ghostClip->duration, 3) + "s");
 }
 
 void Track::inheritBPMFromHeader()
@@ -1406,16 +1567,16 @@ void Track::copySelectedClipsToTrack(Track* targetTrack)
 {
     if (!targetTrack)
         return;
-    
+
     auto selectedClips = getSelectedClips();
     double targetBPM = targetTrack->getTrackBPM();
-    
+
     for (auto* clip : selectedClips)
     {
         MidiClip newClip = createClipForTrack(*clip, targetBPM);
         targetTrack->addClip(newClip);
     }
-    
+
     targetTrack->repaint();
 }
 
@@ -1423,32 +1584,32 @@ void Track::moveSelectedClipsToTrack(Track* targetTrack)
 {
     if (!targetTrack)
         return;
-    
+
     // First copy the clips
     copySelectedClipsToTrack(targetTrack);
-    
+
     // Then remove them from this track
     removeSelectedClips();
-    
+
     repaint();
 }
 
 MidiClip Track::createClipForTrack(const MidiClip& sourceClip, double targetBPM)
 {
     MidiClip newClip = sourceClip;
-    
+
     // Recalculate duration based on BPM difference
     double sourceBPM = sourceClip.referenceBPM;
     double bpmRatio = sourceBPM / targetBPM;
-    
+
     // Adjust duration: if target BPM is higher, clip should be shorter
     newClip.duration = sourceClip.duration * bpmRatio;
     newClip.referenceBPM = targetBPM;
-    
+
     // Generate new ID for the copy
     newClip.id = juce::Uuid().toString();
     newClip.isSelected = false;
-    
+
     return newClip;
 }
 
@@ -1456,41 +1617,41 @@ void Track::startExternalDrag()
 {
     if (isExternalDragActive)
         return;
-        
+
     isExternalDragActive = true;
-    
+
     std::vector<MidiClip*> selectedClips;
     for (auto& clip : clips)
         if (clip->isSelected)
             selectedClips.push_back(clip.get());
-    
+
     if (selectedClips.empty())
     {
         isExternalDragActive = false;
         return;
     }
-    
+
     double trackBPM = getTrackBPM();
     DBG("Track BPM: " + juce::String(trackBPM, 2));
-    
+
     auto* editor = findParentComponentOfClass<juce::AudioProcessorEditor>();
     auto* dragContainer = editor ? dynamic_cast<juce::DragAndDropContainer*>(editor) : nullptr;
-    
+
     if (!dragContainer)
     {
         isExternalDragActive = false;
         return;
     }
-    
-    juce::String tempFileName = "DrumGroovePro_track_drag_" + 
-        juce::String(juce::Random::getSystemRandom().nextInt64()) + ".mid";
+
+    juce::String tempFileName = "DrumGroovePro_track_drag_" +
+    juce::String(juce::Random::getSystemRandom().nextInt64()) + ".mid";
     juce::File tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory).getChildFile(tempFileName);
-    
+
     // For single clip - just BPM adjust like GrooveBrowser
     if (selectedClips.size() == 1)
     {
         auto* clip = selectedClips[0];
-        
+
         juce::FileInputStream inputStream(clip->file);
         juce::MidiFile originalMidi;
         if (!inputStream.openedOk() || !originalMidi.readFrom(inputStream))
@@ -1498,7 +1659,7 @@ void Track::startExternalDrag()
             isExternalDragActive = false;
             return;
         }
-        
+
         // Get original BPM
         double originalBPM = 120.0;
         for (int t = 0; t < originalMidi.getNumTracks(); ++t)
@@ -1514,24 +1675,24 @@ void Track::startExternalDrag()
             }
         }
         foundBPM:
-        
+
         double tempoScale = originalBPM / trackBPM;
         DBG("BPM adjustment: " + juce::String(originalBPM, 2) + " -> " + juce::String(trackBPM, 2) + " (scale: " + juce::String(tempoScale, 4) + ")");
-        
+
         // Create BPM-adjusted MIDI (exactly like GrooveBrowser)
         juce::MidiFile adjustedMidi;
-        
+
         for (int track = 0; track < originalMidi.getNumTracks(); ++track)
         {
             auto* sourceTrack = originalMidi.getTrack(track);
             juce::MidiMessageSequence newTrack;
-            
+
             for (int i = 0; i < sourceTrack->getNumEvents(); ++i)
             {
                 auto& midiEvent = sourceTrack->getEventPointer(i)->message;
                 double oldTimestamp = sourceTrack->getEventTime(i);
                 double newTimestamp = oldTimestamp * tempoScale;
-                
+
                 if (midiEvent.isTempoMetaEvent())
                 {
                     double microsecondsPerQuarterNote = 60000000.0 / trackBPM;
@@ -1546,13 +1707,13 @@ void Track::startExternalDrag()
                     newTrack.addEvent(copiedMessage);
                 }
             }
-            
+
             newTrack.updateMatchedPairs();
             adjustedMidi.addTrack(newTrack);
         }
-        
+
         adjustedMidi.setTicksPerQuarterNote(originalMidi.getTimeFormat());
-        
+
         juce::FileOutputStream outputStream(tempFile);
         if (!outputStream.openedOk() || !adjustedMidi.writeTo(outputStream))
         {
@@ -1566,21 +1727,21 @@ void Track::startExternalDrag()
         // Multiple clips - combine with BPM adjustment
         juce::MidiFile combinedMidi;
         combinedMidi.setTicksPerQuarterNote(480);
-        
+
         double earliestStartTime = std::numeric_limits<double>::max();
         for (auto* clip : selectedClips)
             earliestStartTime = juce::jmin(earliestStartTime, clip->startTime);
-        
+
         juce::Array<juce::MidiMessageSequence> finalTracks;
-        
+
         for (auto* clip : selectedClips)
         {
             if (!clip->file.existsAsFile()) continue;
-                
+
             juce::FileInputStream inputStream(clip->file);
             juce::MidiFile originalMidi;
             if (!inputStream.openedOk() || !originalMidi.readFrom(inputStream)) continue;
-            
+
             double originalBPM = 120.0;
             for (int t = 0; t < originalMidi.getNumTracks(); ++t)
             {
@@ -1595,23 +1756,23 @@ void Track::startExternalDrag()
                 }
             }
             foundBPM2:
-            
+
             double tempoScale = originalBPM / trackBPM;
             double relativeStartTime = clip->startTime - earliestStartTime;
             double offsetTicks = relativeStartTime * 480.0 * (trackBPM / 60.0);
-            
+
             for (int trackNum = 0; trackNum < originalMidi.getNumTracks(); ++trackNum)
             {
                 auto* sourceTrack = originalMidi.getTrack(trackNum);
-                
+
                 while (trackNum >= finalTracks.size())
                     finalTracks.add(juce::MidiMessageSequence());
-                
+
                 for (int i = 0; i < sourceTrack->getNumEvents(); ++i)
                 {
                     auto& event = sourceTrack->getEventPointer(i)->message;
                     double adjustedTime = (sourceTrack->getEventTime(i) * tempoScale) + offsetTicks;
-                    
+
                     if (event.isTempoMetaEvent())
                     {
                         double microsecondsPerQuarterNote = 60000000.0 / trackBPM;
@@ -1628,13 +1789,13 @@ void Track::startExternalDrag()
                 }
             }
         }
-        
+
         for (auto& track : finalTracks)
         {
             track.updateMatchedPairs();
             combinedMidi.addTrack(track);
         }
-        
+
         juce::FileOutputStream outputStream(tempFile);
         if (!outputStream.openedOk() || !combinedMidi.writeTo(outputStream))
         {
@@ -1643,22 +1804,22 @@ void Track::startExternalDrag()
         }
         outputStream.flush();
     }
-    
+
     juce::Thread::sleep(50);
-    
+
     if (!tempFile.existsAsFile() || tempFile.getSize() == 0)
     {
         isExternalDragActive = false;
         return;
     }
-    
+
     if (lastTempDragFile.existsAsFile())
         lastTempDragFile.deleteFile();
     lastTempDragFile = tempFile;
-    
+
     juce::StringArray files;
     files.add(tempFile.getFullPathName());
-    
+
     dragContainer->performExternalDragDropOfFiles(files, true, this, [this, tempFile]()
     {
         isExternalDragActive = false;
@@ -1668,4 +1829,173 @@ void Track::startExternalDrag()
                 tempFile.deleteFile();
         });
     });
+}
+
+// ===== UNDO/REDO SYSTEM IMPLEMENTATION =====
+
+void Track::addClip(const MidiClip& clip, bool recordUndo)
+{
+    if (recordUndo)
+    {
+        addUndoCommand(std::make_unique<TrackAddClipCommand>(this, clip));
+    }
+    else
+    {
+        clips.push_back(std::make_unique<MidiClip>(clip));
+        container.updateTimelineSize();
+        repaint();
+    }
+}
+
+void Track::removeSelectedClips()
+{
+    std::vector<MidiClip> toDelete;
+    for (const auto& clip : clips)
+    {
+        if (clip->isSelected)
+            toDelete.push_back(*clip);
+    }
+
+    if (!toDelete.empty())
+    {
+        addUndoCommand(std::make_unique<TrackDeleteClipsCommand>(this, toDelete));
+    }
+}
+
+void Track::clearAllClips(bool showConfirmation)
+{
+    if (clips.empty())
+        return;
+
+    if (showConfirmation)
+    {
+        // Show confirmation dialog
+        juce::AlertWindow::showAsync(
+            juce::MessageBoxOptions()
+            .withIconType(juce::MessageBoxIconType::WarningIcon)
+            .withTitle("Confirm Clear Track")
+            .withMessage("Are you sure you want to clear all clips from this track? This action cannot be undone.")
+            .withButton("Yes")
+            .withButton("No"),
+                                     [this](int result)
+                                     {
+                                         if (result == 1) // Yes button
+                                         {
+                                             // Clear all clips without undo
+                                             for (const auto& clip : clips)
+                                             {
+                                                 processor.midiProcessor.clearClip(clip->id);
+                                                 DBG("Cleared clip from MidiProcessor: " + clip->id);
+                                             }
+                                             clips.clear();
+                                             clearUndoHistory(); // Clear undo history when doing non-undoable action
+                                             container.updateTimelineSize();
+                                             repaint();
+                                         }
+                                     }
+        );
+    }
+    else
+    {
+        // Direct clear without confirmation (used internally)
+        for (const auto& clip : clips)
+        {
+            processor.midiProcessor.clearClip(clip->id);
+        }
+        clips.clear();
+        container.updateTimelineSize();
+        repaint();
+    }
+}
+
+void Track::undo()
+{
+    if (canUndo())
+    {
+        currentUndoIndex--;
+        undoStack[currentUndoIndex]->undo();
+    }
+}
+
+void Track::redo()
+{
+    if (canRedo())
+    {
+        undoStack[currentUndoIndex]->execute();
+        currentUndoIndex++;
+    }
+}
+
+void Track::addUndoCommand(std::unique_ptr<TrackCommand> command, bool executeNow)
+{
+    // Clear any redo history
+    if (currentUndoIndex < static_cast<int>(undoStack.size()))
+    {
+        undoStack.erase(undoStack.begin() + currentUndoIndex, undoStack.end());
+    }
+
+    // Execute the command only if requested (for delete/add operations)
+    // Move/resize operations have already been applied during mouseDrag
+    if (executeNow)
+    {
+        command->execute();
+    }
+
+    // Add to undo stack
+    undoStack.push_back(std::move(command));
+    currentUndoIndex++;
+
+    // Limit undo stack size
+    while (undoStack.size() > MAX_UNDO_LEVELS)
+    {
+        undoStack.pop_front();
+        currentUndoIndex--;
+    }
+}
+
+void Track::clearUndoHistory()
+{
+    undoStack.clear();
+    currentUndoIndex = 0;
+}
+
+bool Track::keyPressed(const juce::KeyPress& key, juce::Component*)
+{
+    // Handle Delete/Backspace
+    if (key.getKeyCode() == juce::KeyPress::deleteKey ||
+        key.getKeyCode() == juce::KeyPress::backspaceKey)
+    {
+        removeSelectedClips();
+        return true;
+    }
+
+    // Handle Ctrl+Z or Cmd+Z (Undo) - works with both uppercase and lowercase
+    if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown()) &&
+        (key.getKeyCode() == 'Z' || key.getKeyCode() == 'z'))
+    {
+        if (!key.getModifiers().isShiftDown())
+        {
+            undo();
+            return true;
+        }
+    }
+
+    // Handle Ctrl+Y or Cmd+Y or Ctrl+Shift+Z (Redo) - works with both cases
+    if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown()) &&
+        ((key.getKeyCode() == 'Y' || key.getKeyCode() == 'y') ||
+        (key.getModifiers().isShiftDown() && (key.getKeyCode() == 'Z' || key.getKeyCode() == 'z'))))
+    {
+        redo();
+        return true;
+    }
+
+    // Handle Ctrl+A or Cmd+A (Select All) - works with both cases
+    if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown()) &&
+        (key.getKeyCode() == 'A' || key.getKeyCode() == 'a'))
+    {
+        selectAll();
+        return true;
+    }
+
+    return false;
 }

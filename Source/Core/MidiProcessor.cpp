@@ -2,7 +2,7 @@
 #include "DrumLibraryManager.h"
 
 MidiProcessor::MidiProcessor(DrumLibraryManager& drumLibManager)
-    : drumLibraryManager(drumLibManager)
+: drumLibraryManager(drumLibManager)
 {
     sampleRate = 44100.0;
     samplesPerBlock = 512;
@@ -40,7 +40,7 @@ void MidiProcessor::processBlock(juce::MidiBuffer& midiMessages, double bpm, Dru
 
     double secondsPerBlock = static_cast<double>(samplesPerBlock) / sampleRate;
     double adjustedSecondsPerBlock = secondsPerBlock * playbackSpeed;
-    
+
     double blockStartTime = playheadPosition;
     double blockEndTime = playheadPosition + adjustedSecondsPerBlock;
 
@@ -54,32 +54,32 @@ void MidiProcessor::processBlock(juce::MidiBuffer& midiMessages, double bpm, Dru
     playheadPosition = blockEndTime;
 
     if (loopEnabled && playheadPosition >= loopEnd)
-	{
-    double overrun = playheadPosition - loopEnd;
-    playheadPosition = loopStart + overrun;
+    {
+        double overrun = playheadPosition - loopEnd;
+        playheadPosition = loopStart + overrun;
 
-		for (auto& clip : activeClips)
-		{
-			seekClipToTime(*clip, playheadPosition);
-        
-			double visualScaleFactor = clip->referenceBPM / clip->targetBPM;
-			double scaledDuration = clip->duration * visualScaleFactor;
-			double clipEndTime = clip->startTime + scaledDuration;
-        
-			if (playheadPosition >= clip->startTime && playheadPosition < clipEndTime)
-			{
-            clip->isActive = true;
-			}
-		}
-	}
+        for (auto& clip : activeClips)
+        {
+            seekClipToTime(*clip, playheadPosition);
+
+            double visualScaleFactor = clip->referenceBPM / clip->targetBPM;
+            double scaledDuration = clip->duration * visualScaleFactor;
+            double clipEndTime = clip->startTime + scaledDuration;
+
+            if (playheadPosition >= clip->startTime && playheadPosition < clipEndTime)
+            {
+                clip->isActive = true;
+            }
+        }
+    }
 }
 
-void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib, 
+void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib,
                                 double referenceBPM, double targetBPM, int trackNum, const juce::String& clipId)
 {
     if (!file.existsAsFile())
         return;
-    
+
     auto clip = std::make_unique<MidiClipPlayback>();
     clip->id = clipId;  // USE THE PROVIDED ID
     clip->startTime = startTime;
@@ -91,23 +91,23 @@ void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLi
 
     if (!loadMidiFileWithPrecision(file, *clip))
         return;
-    
+
     if (clip->sequence.getNumEvents() == 0)
         return;
 
     juce::ScopedLock sl(clipLock);
     seekClipToTime(*clip, playheadPosition);
     activeClips.push_back(std::move(clip));
-    
+
     DBG("MidiProcessor: Added clip with ID: " + clipId);
 }
 
-void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib, 
+void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib,
                                 double referenceBPM, double targetBPM, int trackNum, double explicitDuration, const juce::String& clipId)
 {
     if (!file.existsAsFile())
         return;
-    
+
     auto clip = std::make_unique<MidiClipPlayback>();
     clip->id = clipId;  // USE THE PROVIDED ID
     clip->startTime = startTime;
@@ -119,15 +119,15 @@ void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLi
 
     if (!loadMidiFileWithPrecision(file, *clip))
         return;
-    
+
     if (clip->sequence.getNumEvents() == 0)
         return;
-    
+
     clip->duration = explicitDuration;
-    
-    DBG("MidiProcessor: Added clip with explicit duration: " + juce::String(explicitDuration, 3) + 
-        "s, referenceBPM: " + juce::String(referenceBPM, 2) + ", targetBPM: " + juce::String(targetBPM, 2) +
-        ", ID: " + clipId);
+
+    DBG("MidiProcessor: Added clip with explicit duration: " + juce::String(explicitDuration, 3) +
+    "s, referenceBPM: " + juce::String(referenceBPM, 2) + ", targetBPM: " + juce::String(targetBPM, 2) +
+    ", ID: " + clipId);
 
     juce::ScopedLock sl(clipLock);
     seekClipToTime(*clip, playheadPosition);
@@ -139,20 +139,20 @@ void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLi
 void MidiProcessor::updateTrackBPM(int trackNumber, double newBPM)
 {
     juce::ScopedLock sl(clipLock);
-    
+
     // CRITICAL FIX: Update BPM and recalculate clip activation states in real-time
     for (auto& clip : activeClips)
     {
         if (clip->trackNumber == trackNumber && clip->targetBPM != newBPM)
         {
             clip->targetBPM = newBPM;
-            
+
             // Recalculate if this clip should be active at current playhead position
             // BPM changes affect visual duration, so we need to recheck boundaries
             double visualScaleFactor = clip->referenceBPM / clip->targetBPM;
             double scaledDuration = clip->duration * visualScaleFactor;
             double clipEndTime = clip->startTime + scaledDuration;
-            
+
             // Update active state based on current playhead position
             if (playheadPosition >= clip->startTime && playheadPosition < clipEndTime)
             {
@@ -167,45 +167,45 @@ void MidiProcessor::updateTrackBPM(int trackNumber, double newBPM)
 }
 
 void MidiProcessor::updateClipBoundaries(const juce::String& clipId, double newStartTime, double newDuration)
-{      
+{
     juce::ScopedLock sl(clipLock);
-    
+
     for (auto& clip : activeClips)
     {
         if (clip->id == clipId)
         {
             clip->startTime = newStartTime;
             clip->duration = newDuration;
-           
+
             double visualScaleFactor = clip->referenceBPM / clip->targetBPM;
             double scaledDuration = newDuration * visualScaleFactor;
             double clipEndTime = newStartTime + scaledDuration;
-            
+
             // CRITICAL FIX: Re-seek clip to current playhead position when boundaries change
             if (playheadPosition >= newStartTime && playheadPosition < clipEndTime)
             {
                 seekClipToTime(*clip, playheadPosition);
                 clip->isActive = true;
-                
-                DBG("MidiProcessor: Clip " + clipId + " repositioned - now active at playhead " + 
-                    juce::String(playheadPosition, 3) + "s (clip: " + 
-                    juce::String(newStartTime, 3) + "s to " + 
-                    juce::String(clipEndTime, 3) + "s)");
+
+                DBG("MidiProcessor: Clip " + clipId + " repositioned - now active at playhead " +
+                juce::String(playheadPosition, 3) + "s (clip: " +
+                juce::String(newStartTime, 3) + "s to " +
+                juce::String(clipEndTime, 3) + "s)");
             }
             else if (playheadPosition < newStartTime)
             {
                 seekClipToTime(*clip, newStartTime);
                 clip->isActive = false;
-                
+
                 DBG("MidiProcessor: Clip " + clipId + " repositioned - inactive (playhead before clip)");
             }
             else
             {
                 clip->isActive = false;
-                
+
                 DBG("MidiProcessor: Clip " + clipId + " repositioned - inactive (playhead after clip)");
             }
-            
+
             break;
         }
     }
@@ -220,13 +220,13 @@ void MidiProcessor::clearAllClips()
 void MidiProcessor::clearClip(const juce::String& clipId)
 {
     juce::ScopedLock sl(clipLock);
-    
+
     activeClips.erase(
         std::remove_if(activeClips.begin(), activeClips.end(),
-            [&clipId](const std::unique_ptr<MidiClipPlayback>& clip) {
-                return clip->id == clipId;
-            }),
-        activeClips.end()
+                       [&clipId](const std::unique_ptr<MidiClipPlayback>& clip) {
+                           return clip->id == clipId;
+                       }),
+                      activeClips.end()
     );
 }
 
@@ -243,13 +243,13 @@ bool MidiProcessor::loadMidiFileWithPrecision(const juce::File& file, MidiClipPl
     double ticksPerQuarterNote = midiFile.getTimeFormat();
     if (ticksPerQuarterNote <= 0)
         ticksPerQuarterNote = 480.0;
-    
+
     clip.originalBPM = 120.0;
     double currentTempo = 120.0;
-    
+
     int numTracks = midiFile.getNumTracks();
     juce::Array<juce::MidiMessageSequence::MidiEventHolder*> allEvents;
-    
+
     for (int t = 0; t < numTracks; ++t)
     {
         const juce::MidiMessageSequence* track = midiFile.getTrack(t);
@@ -261,7 +261,7 @@ bool MidiProcessor::loadMidiFileWithPrecision(const juce::File& file, MidiClipPl
                 if (event)
                 {
                     allEvents.add(event);
-                    
+
                     if (event->message.isTempoMetaEvent())
                     {
                         currentTempo = 60.0 / event->message.getTempoSecondsPerQuarterNote();
@@ -276,7 +276,7 @@ bool MidiProcessor::loadMidiFileWithPrecision(const juce::File& file, MidiClipPl
               [](const juce::MidiMessageSequence::MidiEventHolder* a,
                  const juce::MidiMessageSequence::MidiEventHolder* b) {
                   return a->message.getTimeStamp() < b->message.getTimeStamp();
-              });
+                 });
 
     for (auto* eventHolder : allEvents)
     {
@@ -284,10 +284,10 @@ bool MidiProcessor::loadMidiFileWithPrecision(const juce::File& file, MidiClipPl
             eventHolder->message.isController() || eventHolder->message.isProgramChange())
         {
             double timeInSeconds = (eventHolder->message.getTimeStamp() / ticksPerQuarterNote) * (60.0 / clip.originalBPM);
-            
+
             juce::MidiMessage timedEvent = eventHolder->message;
             timedEvent.setTimeStamp(timeInSeconds);
-            
+
             if (timedEvent.isNoteOn() && timedEvent.getVelocity() > 0)
             {
                 clip.sequence.addEvent(timedEvent);
@@ -326,15 +326,17 @@ void MidiProcessor::processClipWithSampleAccuracy(MidiClipPlayback& clip, juce::
     double visualScaleFactor = clip.referenceBPM / clip.targetBPM;
     double scaledDuration = clip.duration * visualScaleFactor;
     double clipEndTime = clip.startTime + scaledDuration;
-    
-    // CRITICAL FIX: Strict boundary checking - don't play outside visual bounds
-    // If playhead is completely before or after the clip, deactivate and return
-    if (blockStartTime >= clipEndTime || blockEndTime <= clip.startTime)
+
+    // CRITICAL FIX: Use small epsilon for floating point comparisons to handle notes at exactly time 0.0
+    constexpr double EPSILON = 0.0001; // 0.1ms tolerance for boundary checks
+
+    // If playhead is completely before or after the clip (with tolerance), deactivate and return
+    if (blockStartTime >= (clipEndTime + EPSILON) || blockEndTime <= (clip.startTime - EPSILON))
     {
         clip.isActive = false;
         return;
     }
-    
+
     // CRITICAL FIX: If clip already finished (reached its duration), keep it inactive
     double unscaledDuration = clip.duration;
     if (clip.unscaledLocalTime >= unscaledDuration)
@@ -342,12 +344,14 @@ void MidiProcessor::processClipWithSampleAccuracy(MidiClipPlayback& clip, juce::
         clip.isActive = false;
         return;
     }
-    
+
     // Activate clip if it's within bounds and hasn't finished
     if (!clip.isActive)
     {
         clip.isActive = true;
-        seekClipToTime(clip, blockStartTime);
+        // CRITICAL: For notes at the very beginning, ensure we start from time 0.0
+        double seekTime = juce::jmax(clip.startTime, blockStartTime);
+        seekClipToTime(clip, seekTime);
     }
 
     double blockDuration = blockEndTime - blockStartTime;
@@ -355,19 +359,19 @@ void MidiProcessor::processClipWithSampleAccuracy(MidiClipPlayback& clip, juce::
 
     double localBlockStartTime = blockStartTime - clip.startTime;
     double localBlockEndTime = blockEndTime - clip.startTime;
-    
+
     double unscaledLocalStart = localBlockStartTime / visualScaleFactor;
     double unscaledLocalEnd = localBlockEndTime / visualScaleFactor;
-    
+
     // CRITICAL: Clamp to clip's actual duration - don't process beyond visual bounds
     unscaledLocalEnd = juce::jmin(unscaledLocalEnd, unscaledDuration);
 
     // Process MIDI events within this block
     while (clip.currentEventIndex < clip.sequence.getNumEvents())
     {
-        juce::MidiMessageSequence::MidiEventHolder* eventHolder = 
-            clip.sequence.getEventPointer(clip.currentEventIndex);
-        
+        juce::MidiMessageSequence::MidiEventHolder* eventHolder =
+        clip.sequence.getEventPointer(clip.currentEventIndex);
+
         if (!eventHolder)
             break;
 
@@ -386,7 +390,7 @@ void MidiProcessor::processClipWithSampleAccuracy(MidiClipPlayback& clip, juce::
             clip.currentEventIndex++;
             continue;
         }
-        
+
         // Stop if event is after this block
         if (originalEventTime >= unscaledLocalEnd)
         {
@@ -396,50 +400,50 @@ void MidiProcessor::processClipWithSampleAccuracy(MidiClipPlayback& clip, juce::
         // Calculate when this event should fire in the current block
         double scaledEventTime = originalEventTime * visualScaleFactor;
         double absoluteEventTime = clip.startTime + scaledEventTime;
-        
+
         // CRITICAL: Double-check event is within clip visual bounds
         if (absoluteEventTime >= clipEndTime)
         {
             clip.isActive = false;
             break;
         }
-        
+
         double relativeTime = absoluteEventTime - blockStartTime;
         int sampleOffset = static_cast<int>(relativeTime * sampleRate);
-        
+
         // Only add events that are within the current audio block
         if (sampleOffset >= 0 && sampleOffset < samplesPerBlock)
         {
             juce::MidiMessage message = eventHolder->message;
-            
+
             // Apply drum library remapping if needed
             if (message.isNoteOnOrOff())
             {
                 int originalNote = message.getNoteNumber();
                 int remappedNote = drumLibraryManager.mapNoteToLibrary(originalNote, clip.sourceLibrary, targetLib);
-                
+
                 if (remappedNote != originalNote)
                 {
                     if (message.isNoteOn())
-                        message = juce::MidiMessage::noteOn(message.getChannel(), remappedNote, 
-                                                           static_cast<juce::uint8>(message.getVelocity()));
-                    else
-                        message = juce::MidiMessage::noteOff(message.getChannel(), remappedNote, 
+                        message = juce::MidiMessage::noteOn(message.getChannel(), remappedNote,
                                                             static_cast<juce::uint8>(message.getVelocity()));
+                        else
+                            message = juce::MidiMessage::noteOff(message.getChannel(), remappedNote,
+                                                                 static_cast<juce::uint8>(message.getVelocity()));
                 }
             }
-            
+
             buffer.addEvent(message, sampleOffset);
         }
 
         clip.currentEventIndex++;
     }
-    
+
     // Update clip's local time position
     clip.unscaledLocalTime = unscaledLocalEnd;
-    
+
     // CRITICAL: Mark clip as inactive if it has finished or reached its duration
-    if (clip.currentEventIndex >= clip.sequence.getNumEvents() || 
+    if (clip.currentEventIndex >= clip.sequence.getNumEvents() ||
         clip.unscaledLocalTime >= unscaledDuration ||
         blockEndTime >= clipEndTime)
     {
@@ -450,7 +454,7 @@ void MidiProcessor::processClipWithSampleAccuracy(MidiClipPlayback& clip, juce::
 void MidiProcessor::seekClipToTime(MidiClipPlayback& clip, double globalTime)
 {
     double localTime = globalTime - clip.startTime;
-    
+
     if (localTime < 0.0 || clip.sequence.getNumEvents() == 0)
     {
         clip.currentEventIndex = 0;
@@ -461,21 +465,21 @@ void MidiProcessor::seekClipToTime(MidiClipPlayback& clip, double globalTime)
     double visualScaleFactor = clip.referenceBPM / clip.targetBPM;
     double unscaledLocalTime = localTime / visualScaleFactor;
     clip.unscaledLocalTime = unscaledLocalTime;
-    
+
     int low = 0;
     int high = clip.sequence.getNumEvents() - 1;
     int result = 0;
-    
+
     while (low <= high)
     {
         int mid = (low + high) / 2;
         juce::MidiMessageSequence::MidiEventHolder* event = clip.sequence.getEventPointer(mid);
-        
+
         if (!event)
             break;
-            
+
         double eventTime = event->message.getTimeStamp();
-        
+
         if (eventTime <= unscaledLocalTime)
         {
             result = mid;
@@ -486,7 +490,7 @@ void MidiProcessor::seekClipToTime(MidiClipPlayback& clip, double globalTime)
             high = mid - 1;
         }
     }
-    
+
     clip.currentEventIndex = result;
 }
 
@@ -523,9 +527,9 @@ void MidiProcessor::pause()
 void MidiProcessor::setPlayheadPosition(double timeInSeconds)
 {
     playheadPosition = juce::jmax(0.0, timeInSeconds);
-    
+
     juce::ScopedLock sl(clipLock);
-    
+
     for (auto& clip : activeClips)
     {
         seekClipToTime(*clip, playheadPosition);

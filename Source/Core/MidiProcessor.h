@@ -31,10 +31,10 @@ public:
     void processBlock(juce::MidiBuffer& midiMessages, double currentBPM, DrumLibrary targetLibrary);
 
     void addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib, double referenceBPM, double targetBPM, int trackNum, const juce::String& clipId);
-	void addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib, double referenceBPM, double targetBPM, int trackNum, double explicitDuration, const juce::String& clipId);
+    void addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib, double referenceBPM, double targetBPM, int trackNum, double explicitDuration, const juce::String& clipId);
     void clearAllClips();
     void clearClip(const juce::String& clipId);
-    
+
     void updateTrackBPM(int trackNumber, double newBPM);
     void updateClipBoundaries(const juce::String& clipId, double newStartTime, double newDuration);
 
@@ -46,11 +46,25 @@ public:
     void setPlayheadPosition(double timeInSeconds);
     double getPlayheadPosition() const { return playheadPosition; }
 
+    // Get visual playhead position (with configurable latency offset for better sync perception)
+    double getVisualPlayheadPosition() const
+    {
+        return juce::jmax(0.0, playheadPosition + visualLatencyOffsetSeconds);
+    }
+
     void setLoopEnabled(bool enabled) { loopEnabled = enabled; }
     void setLoopRange(double start, double end) { loopStart = start; loopEnd = end; }
 
     void setPlaybackSpeed(double speed) { playbackSpeed = juce::jlimit(0.25, 2.0, speed); }
     double getPlaybackSpeed() const { return playbackSpeed; }
+
+    // Latency offset control - configurable visual delay to compensate for hardware/system latency
+    void setVisualLatencyOffset(double milliseconds)
+    {
+        visualLatencyOffsetSeconds = milliseconds / 1000.0;
+    }
+
+    double getVisualLatencyOffsetMs() const { return visualLatencyOffsetSeconds * 1000.0; }
 
 private:
     DrumLibraryManager& drumLibraryManager;
@@ -64,16 +78,17 @@ private:
     double loopEnd = 4.0;
     double playheadPosition = 0.0;
     double playbackSpeed = 1.0;
+    double visualLatencyOffsetSeconds = -0.020; // Default -20ms visual delay
 
     std::vector<std::unique_ptr<MidiClipPlayback>> activeClips;
     juce::CriticalSection clipLock;
 
     bool loadMidiFileWithPrecision(const juce::File& file, MidiClipPlayback& clip);
-    
+
     void processClipWithSampleAccuracy(MidiClipPlayback& clip, juce::MidiBuffer& buffer,
-                                      double blockStartTime, double blockEndTime,
-                                      double bpm, DrumLibrary targetLib);
-    
+                                       double blockStartTime, double blockEndTime,
+                                       double bpm, DrumLibrary targetLib);
+
     void seekClipToTime(MidiClipPlayback& clip, double globalTime);
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MidiProcessor)

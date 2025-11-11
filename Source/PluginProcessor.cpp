@@ -28,7 +28,7 @@ midiProcessor(drumLibraryManager)
     // Initialize GUI state tree with default values
     guiStateTree.setProperty("currentBrowserFolder", "", nullptr);
     guiStateTree.setProperty("selectedFile", "", nullptr);
-    guiStateTree.setProperty("editorWidth", 1300, nullptr);
+    guiStateTree.setProperty("editorWidth", 1400, nullptr);
     guiStateTree.setProperty("editorHeight", 900, nullptr);
     guiStateTree.setProperty("editorX", -1, nullptr);
     guiStateTree.setProperty("editorY", -1, nullptr);
@@ -38,10 +38,17 @@ midiProcessor(drumLibraryManager)
 
     // Listen for changes to the ValueTree
     parameters.state.addListener(this);
+
+    // Listen for parameter changes (including when state is restored)
+    parameters.addParameterListener("visualLatencyOffset", this);
+
+    // Initialize visual latency offset in MidiProcessor from parameter
+    midiProcessor.setVisualLatencyOffset(getVisualLatencyOffset());
 }
 
 DrumGrooveProcessor::~DrumGrooveProcessor()
 {
+    parameters.removeParameterListener("visualLatencyOffset", this);
     parameters.state.removeListener(this);
     drumLibraryManager.saveConfiguration();
 }
@@ -206,6 +213,7 @@ void DrumGrooveProcessor::getStateInformation(juce::MemoryBlock& destData)
     }
 }
 
+
 void DrumGrooveProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
     auto xmlState = getXmlFromBinary(data, sizeInBytes);
@@ -221,9 +229,6 @@ void DrumGrooveProcessor::setStateInformation(const void* data, int sizeInBytes)
         {
             guiStateTree = guiChild;
 
-            // DO NOT call restoreCompleteGuiState() here!
-            // The editor will read from guiStateTree when it opens
-            // This avoids blocking file I/O during state loading
         }
 
         // CRITICAL FIX: Force parameter notification to update GUI controls
@@ -299,6 +304,13 @@ juce::AudioProcessorValueTreeState::ParameterLayout DrumGrooveProcessor::createP
             "Track Mute",
             false));
 
+        // Visual Latency Offset parameter (in milliseconds)
+        layout.add(std::make_unique<juce::AudioParameterFloat>(
+            "visualLatencyOffset",
+            "Visual Latency Offset (ms)",
+            juce::NormalisableRange<float>(-200.0f, 0.0f, 1.0f),
+            -20.0f)); // Default: -20ms
+
         return layout;
 }
 
@@ -309,7 +321,7 @@ DrumGrooveProcessor::GuiState DrumGrooveProcessor::getGuiState() const
 
     state.currentBrowserFolder = guiStateTree.getProperty("currentBrowserFolder", "");
     state.selectedFile = guiStateTree.getProperty("selectedFile", "");
-    state.editorWidth = guiStateTree.getProperty("editorWidth", 1300);
+    state.editorWidth = guiStateTree.getProperty("editorWidth", 1400);
     state.editorHeight = guiStateTree.getProperty("editorHeight", 900);
     state.editorX = guiStateTree.getProperty("editorX", -1);
     state.editorY = guiStateTree.getProperty("editorY", -1);
@@ -418,5 +430,17 @@ void DrumGrooveProcessor::restoreCompleteGuiState()
                 container->restoreGuiState(guiStateTree);
             }
         }
+    }
+}
+
+void DrumGrooveProcessor::parameterChanged(const juce::String& parameterID, float newValue)
+{
+    if (parameterID == "visualLatencyOffset")
+    {
+        juce::File logFile = juce::File::getSpecialLocation(juce::File::userDesktopDirectory)
+        .getChildFile("visual_playhead.log");
+        logFile.appendText("\nCALLBACK: " + juce::String(newValue) + "ms\n");
+
+        midiProcessor.setVisualLatencyOffset(newValue);
     }
 }

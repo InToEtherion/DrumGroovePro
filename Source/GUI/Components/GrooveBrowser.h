@@ -14,19 +14,19 @@ class DraggableListItemOverlay : public juce::Component
 {
 public:
     DraggableListItemOverlay(BrowserColumn* parent) : parentColumn(parent) {}
-    
+
     void mouseDown(const juce::MouseEvent& e) override;
     void mouseDrag(const juce::MouseEvent& e) override;
     void mouseUp(const juce::MouseEvent& e) override;
-    void mouseDoubleClick(const juce::MouseEvent& e) override;  // ✅ ADD THIS LINE
-    
+    void mouseDoubleClick(const juce::MouseEvent& e) override;
+
     void setRow(int rowNum) { row = rowNum; }
-    
+
 private:
     BrowserColumn* parentColumn;
     int row = -1;
     bool isDragging = false;
-    
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DraggableListItemOverlay)
 };
 
@@ -38,15 +38,18 @@ public:
 
     int getNumRows() override;
     void paintListBoxItem(int rowNumber, juce::Graphics& g, int width, int height, bool rowIsSelected) override;
-    
-    // NEW: Add overlay component to each row for drag handling
+
+    // Add overlay component to each row for drag handling
     juce::Component* refreshComponentForRow(int rowNumber, bool isRowSelected, juce::Component* existingComponentToUpdate) override;
-    
+
     void selectedRowsChanged(int lastRowSelected) override;
     void listBoxItemDoubleClicked(int row, const juce::MouseEvent& e) override;
     void listBoxItemClicked(int row, const juce::MouseEvent& e) override;
-    
-    // NEW: Public method called by DraggableListItemOverlay
+
+    // Override keyPressed to forward arrow keys to parent
+    bool keyPressed(const juce::KeyPress& key) override;  // ADD THIS LINE
+
+    // Public method called by DraggableListItemOverlay
     void startExternalDrag(int rowNumber);
 
     void setItems(const juce::StringArray& items, const juce::Array<bool>& isFolder, const juce::Array<juce::File>& filePaths = {});
@@ -70,19 +73,19 @@ public:
 
 private:
     void loadIcons();
-    
+
     // Context menu methods
     void showContextMenu(int row, const juce::Point<int>& position);
     void exportFileToDesktop(const juce::File& originalFile);
-    
+
     juce::String columnTitle;
     int selectedRow = -1;
     juce::Image folderIcon;
     juce::Image midiIcon;
-    
+
     // Processor reference needed for export functionality
     DrumGrooveProcessor& processor;
-    
+
     // For external drag
     bool isExternalDragActive = false;
     juce::File lastTempDragFile;
@@ -91,101 +94,116 @@ private:
 };
 
 class GrooveBrowser : public juce::Component,
-                     public juce::DragAndDropContainer,
-                     public juce::ComboBox::Listener,
-                     public juce::AudioProcessorValueTreeState::Listener,
-                     private juce::Timer
-{
-public:
-    explicit GrooveBrowser(DrumGrooveProcessor& processor);
-    ~GrooveBrowser() override;
+public juce::DragAndDropContainer,
+    public juce::ComboBox::Listener,
+        public juce::AudioProcessorValueTreeState::Listener,
+            public juce::KeyListener,
+                private juce::Timer
+                {
+                public:
+                    explicit GrooveBrowser(DrumGrooveProcessor& processor);
+                    ~GrooveBrowser() override;
 
-    void paint(juce::Graphics& g) override;
-    void resized() override;
+                    void paint(juce::Graphics& g) override;
+                    void resized() override;
+                    void mouseDown(const juce::MouseEvent& e) override;
 
-    // ComboBox::Listener implementation
-    void comboBoxChanged(juce::ComboBox* comboBoxThatHasChanged) override;
-    
-    // AudioProcessorValueTreeState::Listener implementation
-    void parameterChanged(const juce::String& parameterID, float newValue) override;
+                    // ComboBox::Listener implementation
+                    void comboBoxChanged(juce::ComboBox* comboBoxThatHasChanged) override;
 
-    void loadFolderContents(const juce::File& folder);
-    void handleFileSelection(const juce::File& file);
-    void handleFileDoubleClick(const juce::File& file);
-    void handleColumnDoubleClick(int columnIndex, int row);
-    void handleMidiFileSelection(const juce::File& midiFile);
-    void handleDrumPartSelection(const DrumPart& part);
-    void handleDrumPartDoubleClick(const DrumPart& part);
+                    // AudioProcessorValueTreeState::Listener implementation
+                    void parameterChanged(const juce::String& parameterID, float newValue) override;
 
-    bool keyPressed(const juce::KeyPress& key) override;
-    void timerCallback() override;
+                    void loadFolderContents(const juce::File& folder);
+                    void handleFileSelection(const juce::File& file);
+                    void handleFileDoubleClick(const juce::File& file);
+                    void handleColumnDoubleClick(int columnIndex, int row);
+                    void handleMidiFileSelection(const juce::File& midiFile);
+                    void handleDrumPartSelection(const DrumPart& part);
+                    void handleDrumPartDoubleClick(const DrumPart& part);
 
-    // File selection callback for main component
-    std::function<void(const juce::File&)> onFileSelected;
+                    // Keyboard handling - NEW: Enhanced for space bar and arrow keys
+                    bool keyPressed(const juce::KeyPress& key) override;
+                    bool keyPressed(const juce::KeyPress& key, juce::Component* originatingComponent) override;
 
-    // Get current state for persistence
-    juce::File getCurrentFolder() const { return currentPath; }
-    juce::Array<juce::File> getNavigationPath() const { return navigationPath; }
-    void restoreNavigationState(const juce::File& folder, const juce::Array<juce::File>& path);
+                    void timerCallback() override;
 
-private:
-    DrumGrooveProcessor& processor;
-	
-	// BPM monitoring for real-time updates
-	double lastKnownBPM = 120.0;
+                    // File selection callback for main component
+                    std::function<void(const juce::File&)> onFileSelected;
 
-    // Column management
-    juce::OwnedArray<BrowserColumn> folderColumns;
-    std::unique_ptr<DrumPartsColumn> partsColumn;
+                    // Get current state for persistence
+                    juce::File getCurrentFolder() const { return currentPath; }
+                    juce::Array<juce::File> getNavigationPath() const { return navigationPath; }
+                    void restoreNavigationState(const juce::File& folder, const juce::Array<juce::File>& path);
 
-    juce::Viewport viewport;
-    juce::Component columnsContainer;
-    juce::File currentPath;
-    juce::Array<juce::File> navigationPath;
+                private:
+                    DrumGrooveProcessor& processor;
 
-    // MIDI dissection
-    MidiDissector midiDissector;
-    juce::File currentMidiFile;
-    juce::Array<DrumPart> currentDrumParts;
-    DrumLibrary currentSourceLibrary = DrumLibrary::Unknown;
-    
-    // Prevent double-processing of target library changes
-    bool isHandlingTargetLibraryChange = false;
+                    // BPM monitoring for real-time updates
+                    double lastKnownBPM = 120.0;
 
-    // Target library control
-    juce::Label targetLibraryLabel;
-    juce::ComboBox targetLibraryCombo;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> libraryAttachment;
-    
-    // Helper methods
-    DrumLibrary getCurrentTargetLibrary() const;
-    void handleTargetLibraryChange();
-    void redissectCurrentMidiFile();
-    void showFolderContextMenu(const juce::File& folder);
-    void syncComboBoxWithParameter();
+                    // Column management
+                    juce::OwnedArray<BrowserColumn> folderColumns;
+                    std::unique_ptr<DrumPartsColumn> partsColumn;
 
-    // Column widths
-    static constexpr int FOLDER_COLUMN_WIDTH = 220;
-    static constexpr int FILE_COLUMN_WIDTH = 300;
-    static constexpr int PARTS_COLUMN_WIDTH = 350;
-    static constexpr int COLUMN_HEIGHT_MIN = 400;
+                    juce::Viewport viewport;
+                    juce::Component columnsContainer;
+                    juce::File currentPath;
+                    juce::Array<juce::File> navigationPath;
 
-    // Column management methods
-    void addFolderColumn(const juce::String& title, bool isFileColumn = false);
-    void removeFolderColumnsAfter(int index);
-    void addPartsColumn();
-    void removePartsColumn();
-    void updateColumnsLayout();
+                    // MIDI dissection
+                    MidiDissector midiDissector;
+                    juce::File currentMidiFile;
+                    juce::Array<DrumPart> currentDrumParts;
+                    DrumLibrary currentSourceLibrary = DrumLibrary::Unknown;
 
-    void scanFolder(const juce::File& folder, BrowserColumn* column);
-    void navigateToFolder(const juce::File& folder, int columnIndex);
-    void handleColumnSelection(int columnIndex);
+                    // Prevent double-processing of target library changes
+                    bool isHandlingTargetLibraryChange = false;
 
-    juce::String formatFileName(const juce::String& filename, bool isMidiFile) const;
-    int extractBPMFromFilename(const juce::String& filename) const;
-    juce::File getCurrentFileForRow(int columnIndex, int row);
-	
-	bool hasInitializedTargetLibrary = false;
+                    // Target library control
+                    juce::Label targetLibraryLabel;
+                    juce::ComboBox targetLibraryCombo;
+                    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> libraryAttachment;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GrooveBrowser)
-};
+                    // NEW: Browser playback state for loop and keyboard control
+                    bool browserPlaybackActive = false;
+                    juce::File currentlyPlayingFile;
+
+                    // Helper methods
+                    DrumLibrary getCurrentTargetLibrary() const;
+                    void handleTargetLibraryChange();
+                    void redissectCurrentMidiFile();
+                    void showFolderContextMenu(const juce::File& folder);
+                    void syncComboBoxWithParameter();
+
+                    // NEW: Navigation helpers for arrow keys
+                    void navigateToNextMidiFile();
+                    void navigateToPreviousMidiFile();
+                    BrowserColumn* getActiveFileColumn();
+                    void playFileAtRow(BrowserColumn* column, int row);
+
+                    // Column widths
+                    static constexpr int FOLDER_COLUMN_WIDTH = 220;
+                    static constexpr int FILE_COLUMN_WIDTH = 300;
+                    static constexpr int PARTS_COLUMN_WIDTH = 350;
+                    static constexpr int COLUMN_HEIGHT_MIN = 400;
+
+                    // Column management methods
+                    void addFolderColumn(const juce::String& title, bool isFileColumn = false);
+                    void removeFolderColumnsAfter(int index);
+                    void addPartsColumn();
+                    void removePartsColumn();
+                    void updateColumnsLayout();
+
+                    void scanFolder(const juce::File& folder, BrowserColumn* column);
+                    void navigateToFolder(const juce::File& folder, int columnIndex);
+                    void handleColumnSelection(int columnIndex);
+
+                    juce::String formatFileName(const juce::String& filename, bool isMidiFile) const;
+                    int extractBPMFromFilename(const juce::String& filename) const;
+                    juce::File getCurrentFileForRow(int columnIndex, int row);
+
+                    bool hasInitializedTargetLibrary = false;
+
+                    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GrooveBrowser)
+                };

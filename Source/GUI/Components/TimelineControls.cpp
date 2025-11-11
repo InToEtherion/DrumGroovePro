@@ -100,6 +100,33 @@ TimelineControls::TimelineControls(DrumGrooveProcessor& p, MultiTrackContainer& 
     speedSlider.addListener(this);
     addAndMakeVisible(speedSlider);
 
+    latencyLabel.setText("Latency:", juce::dontSendNotification);
+    latencyLabel.setFont(lnf.getSmallFont());
+    latencyLabel.setColour(juce::Label::textColourId, ColourPalette::primaryText);
+    addAndMakeVisible(latencyLabel);
+
+    // Text-only latency offset control (type value directly)
+    latencyOffsetField.setText("-20", juce::dontSendNotification);
+    latencyOffsetField.setFont(lnf.getMonospaceFont().withHeight(12.0f));
+    latencyOffsetField.setColour(juce::TextEditor::backgroundColourId, ColourPalette::inputBackground);
+    latencyOffsetField.setColour(juce::TextEditor::textColourId, ColourPalette::primaryText);
+    latencyOffsetField.setColour(juce::TextEditor::outlineColourId, ColourPalette::borderColour);
+    latencyOffsetField.setJustification(juce::Justification::centred);
+    latencyOffsetField.setInputRestrictions(4, "-0123456789");
+    latencyOffsetField.setTooltip("Visual latency offset in ms: Negative = visual lags behind audio (default: -20ms, range: -200 to 200)");
+    latencyOffsetField.onReturnKey = [this]() {
+        handleLatencyOffsetChange();
+        latencyOffsetField.giveAwayKeyboardFocus();
+    };
+    latencyOffsetField.onEscapeKey = [this]() {
+        updateLatencyOffsetField();
+        latencyOffsetField.giveAwayKeyboardFocus();
+    };
+    latencyOffsetField.onFocusLost = [this]() {
+        handleLatencyOffsetChange();
+    };
+    addAndMakeVisible(latencyOffsetField);
+
     zoomOutButton.setButtonText("-");
     zoomOutButton.addListener(this);
     addAndMakeVisible(zoomOutButton);
@@ -126,6 +153,9 @@ TimelineControls::TimelineControls(DrumGrooveProcessor& p, MultiTrackContainer& 
     updateLoopButton();
     updateLoopTimeFields();
 
+    // Initialize latency field with current parameter value
+    updateLatencyOffsetField();
+
     startTimer(50);
 }
 
@@ -148,6 +178,7 @@ void TimelineControls::resized()
 {
     auto bounds = getLocalBounds().reduced(5);
 
+    // === FILE OPERATIONS (keep same size) ===
     auto fileButtonsArea = bounds.removeFromLeft(FILE_BUTTONS_WIDTH);
     fileButton.setBounds(fileButtonsArea.removeFromLeft(80).reduced(2));
     fileButtonsArea.removeFromLeft(3);
@@ -155,8 +186,10 @@ void TimelineControls::resized()
     fileButtonsArea.removeFromLeft(3);
     removeButton.setBounds(fileButtonsArea.removeFromLeft(40).reduced(2));
 
-    bounds.removeFromLeft(LEFT_MARGIN);
+    // Space after file buttons
+    bounds.removeFromLeft(20);
 
+    // === TRANSPORT CONTROLS ===
     playButton.setBounds(bounds.removeFromLeft(60));
     pauseButton.setBounds(playButton.getBounds());
     bounds.removeFromLeft(5);
@@ -164,10 +197,16 @@ void TimelineControls::resized()
     bounds.removeFromLeft(5);
     loopButton.setBounds(bounds.removeFromLeft(60));
 
-    bounds.removeFromLeft(10);
+    // Space after transport
+    bounds.removeFromLeft(20);
+
+    // === TIME DISPLAY ===
     timeDisplay.setBounds(bounds.removeFromLeft(110));
 
-    bounds.removeFromLeft(15);
+    // Space after time
+    bounds.removeFromLeft(25);
+
+    // === LOOP SELECTION ===
     auto loopFieldArea = bounds.removeFromLeft(280);
     loopStartLabel.setBounds(loopFieldArea.removeFromLeft(35));
     loopStartField.setBounds(loopFieldArea.removeFromLeft(95).withHeight(22));
@@ -175,17 +214,35 @@ void TimelineControls::resized()
     loopEndLabel.setBounds(loopFieldArea.removeFromLeft(30));
     loopEndField.setBounds(loopFieldArea.removeFromLeft(95).withHeight(22));
 
-    bounds.removeFromLeft(15);
-    auto speedArea = bounds.removeFromLeft(150);
+    // Space after loop fields
+    bounds.removeFromLeft(25);
+
+    // === SPEED CONTROL ===
+    auto speedArea = bounds.removeFromLeft(140);
     speedLabel.setBounds(speedArea.removeFromLeft(45));
     speedSlider.setBounds(speedArea);
 
-    auto zoomArea = bounds.removeFromRight(230);
-    fitButton.setBounds(zoomArea.removeFromRight(40));
-    zoomArea.removeFromRight(5);
-    zoomInButton.setBounds(zoomArea.removeFromRight(30));
-    zoomSlider.setBounds(zoomArea.removeFromRight(120));
-    zoomOutButton.setBounds(zoomArea.removeFromRight(30));
+    // Space after speed
+    bounds.removeFromLeft(25);
+
+    // === LATENCY CONTROL ===
+    auto latencyArea = bounds.removeFromLeft(100);
+    latencyLabel.setBounds(latencyArea.removeFromLeft(55));
+    latencyOffsetField.setBounds(latencyArea.withHeight(22));
+
+    // Space before zoom controls
+    bounds.removeFromLeft(20);
+
+    // === ZOOM CONTROLS ===
+    auto zoomArea = bounds.removeFromRight(235);
+
+    zoomOutButton.setBounds(zoomArea.removeFromLeft(30));
+    zoomArea.removeFromLeft(5);
+    zoomSlider.setBounds(zoomArea.removeFromLeft(120));
+    zoomArea.removeFromLeft(5);
+    zoomInButton.setBounds(zoomArea.removeFromLeft(30));
+    zoomArea.removeFromLeft(5);
+    fitButton.setBounds(zoomArea.removeFromLeft(40));
 }
 
 void TimelineControls::buttonClicked(juce::Button* button)
@@ -265,13 +322,17 @@ void TimelineControls::timerCallback()
     updateTimeDisplay();
     updateLoopButton();
     updateLoopTimeFields();
-    updateTransportButtons(); 
+    updateTransportButtons();
 }
 
 void TimelineControls::updateTimeDisplay()
 {
     double time = container.getPlayheadPosition();
-    timeDisplay.setText(formatTime(time), juce::dontSendNotification);
+    float latencyMs = processor.getVisualLatencyOffset();
+
+    // Show latency value in display
+    juce::String timeText = formatTime(time) + " (" + juce::String(static_cast<int>(latencyMs)) + "ms)";
+    timeDisplay.setText(timeText, juce::dontSendNotification);
 }
 
 void TimelineControls::updateZoomDisplay()
@@ -343,12 +404,12 @@ void TimelineControls::setLoopEndTime(double timeInSeconds)
 void TimelineControls::handleLoopStartChange()
 {
     juce::String text = loopStartField.getText();
-    
+
     if (!isValidTimeFormat(text))
         return;
-    
+
     double time = parseTime(text);
-    
+
     if (time >= 0.0)
     {
         container.setSelectionStart(time);
@@ -358,12 +419,12 @@ void TimelineControls::handleLoopStartChange()
 void TimelineControls::handleLoopEndChange()
 {
     juce::String text = loopEndField.getText();
-    
+
     if (!isValidTimeFormat(text))
         return;
-    
+
     double time = parseTime(text);
-    
+
     if (time >= 0.0)
     {
         container.setSelectionEnd(time);
@@ -380,17 +441,17 @@ void TimelineControls::showFileMenu()
     menu.addItem(4, "Export Tracks as Separate MIDIs");
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&fileButton),
-        [this](int result)
-        {
-            if (result == 1)
-                timelineManager->saveTimelineState();
-            else if (result == 2)
-                timelineManager->loadTimelineState();
-            else if (result == 3)
-                showExportMenu();
-            else if (result == 4)
-                timelineManager->exportTimelineAsSeparateMidis();
-        });
+                       [this](int result)
+                       {
+                           if (result == 1)
+                               timelineManager->saveTimelineState();
+                           else if (result == 2)
+                               timelineManager->loadTimelineState();
+                           else if (result == 3)
+                               showExportMenu();
+                           else if (result == 4)
+                               timelineManager->exportTimelineAsSeparateMidis();
+                       });
 }
 
 void TimelineControls::showExportMenu()
@@ -399,11 +460,11 @@ void TimelineControls::showExportMenu()
     menu.addItem(1, "Export Full Timeline");
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&fileButton),
-        [this](int result)
-        {
-            if (result == 1)
-                timelineManager->exportTimelineAsMidi();
-        });
+                       [this](int result)
+                       {
+                           if (result == 1)
+                               timelineManager->exportTimelineAsMidi();
+                       });
 }
 
 void TimelineControls::onAddFile()
@@ -414,7 +475,7 @@ void TimelineControls::onAddFile()
 void TimelineControls::onRemoveFile()
 {
     int selectedTrack = container.getSelectedTrackIndex();
-    
+
     if (selectedTrack >= 0)
     {
         container.removeTrack(selectedTrack);
@@ -463,4 +524,35 @@ bool TimelineControls::isValidTimeFormat(const juce::String& timeStr)
     }
 
     return true;
+}
+
+void TimelineControls::handleLatencyOffsetChange()
+{
+    juce::String text = latencyOffsetField.getText().trim();
+
+    if (text.isEmpty() || text == "-")
+        return;
+
+    int latencyMs = text.getIntValue();
+
+    // Force negative values only
+    if (latencyMs > 0)
+        latencyMs = -latencyMs;
+
+    // Clamp to valid range (-200 to 0)
+    latencyMs = juce::jlimit(-200, 0, latencyMs);
+
+    processor.setVisualLatencyOffset(static_cast<float>(latencyMs));
+    latencyOffsetField.setText(juce::String(latencyMs), juce::dontSendNotification);
+}
+
+void TimelineControls::updateLatencyOffsetField()
+{
+    // Only update if field doesn't have focus (don't interfere while typing)
+    if (!latencyOffsetField.hasKeyboardFocus(true))
+    {
+        float currentValue = processor.getVisualLatencyOffset();
+        int roundedValue = juce::roundToInt(currentValue);
+        latencyOffsetField.setText(juce::String(roundedValue), juce::dontSendNotification);
+    }
 }

@@ -113,6 +113,24 @@ BrowserColumn::~BrowserColumn()
     }
 }
 
+bool BrowserColumn::keyPressed(const juce::KeyPress& key)
+{
+    // Forward arrow keys to parent GrooveBrowser for MIDI navigation
+    if (key.getKeyCode() == juce::KeyPress::upKey ||
+        key.getKeyCode() == juce::KeyPress::downKey)
+    {
+        // Get the parent GrooveBrowser
+        if (auto* parent = findParentComponentOfClass<GrooveBrowser>())
+        {
+            // Forward the key to the parent
+            return parent->keyPressed(key);
+        }
+    }
+
+    // Let ListBox handle other keys (left/right for column navigation, etc.)
+    return ListBox::keyPressed(key);
+}
+
 void BrowserColumn::loadIcons()
 {
     // Load actual icons from Resources folder
@@ -605,6 +623,8 @@ void BrowserColumn::startExternalDrag(int rowNumber)
 
 GrooveBrowser::GrooveBrowser(DrumGrooveProcessor& p)
 : processor(p),
+browserPlaybackActive(false),
+currentlyPlayingFile(juce::File()),
 currentSourceLibrary(DrumLibrary::Unknown),
 isHandlingTargetLibraryChange(false)
 {
@@ -697,6 +717,10 @@ isHandlingTargetLibraryChange(false)
     viewport.setScrollBarsShown(false, true);
     addAndMakeVisible(viewport);
 
+    // NEW: Enable keyboard focus so space bar and arrow keys work
+    setWantsKeyboardFocus(true);
+    addKeyListener(this);
+
     startTimer(100);
 }
 
@@ -706,6 +730,7 @@ GrooveBrowser::~GrooveBrowser()
     stopTimer();
     targetLibraryCombo.removeListener(this);
     processor.parameters.removeParameterListener("targetLibrary", this);
+    removeKeyListener(this);
 }
 
 void GrooveBrowser::paint(juce::Graphics& g)
@@ -941,13 +966,30 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
             headerBPM = processor.parameters.getRawParameterValue("manualBPM")->load();
         }
 
-        // Ã¢Å“â€¦ FIX: Pass original MIDI BPM (120.0) as reference, header BPM as target
-        // This makes the file play faster/slower based on header BPM
-        processor.midiProcessor.addMidiClip(file, 0.0, sourceLib, 120.0, headerBPM, 0, 10.0, "preview_" + juce::Uuid().toString());
-        processor.midiProcessor.setPlayheadPosition(0.0);
-        processor.midiProcessor.play();
+        // Get the actual duration of the MIDI file for accurate loop length
+        juce::MidiFile midiFile;
+        juce::FileInputStream stream(file);
+        if (midiFile.readFrom(stream))
+        {
+            double fileDuration = midiFile.getLastTimestamp();
 
-        DBG("Playing file: " + file.getFullPathName() + " at " + juce::String(headerBPM, 2) + " BPM");
+            // NEW: Enable loop by default for browser playback
+            // Add the clip with proper duration
+            processor.midiProcessor.addMidiClip(file, 0.0, sourceLib, 120.0, headerBPM, 0, fileDuration, "preview_" + juce::Uuid().toString());
+            processor.midiProcessor.setPlayheadPosition(0.0);
+
+            // NEW: Set loop range to file duration and enable looping
+            processor.midiProcessor.setLoopRange(0.0, fileDuration);
+            processor.midiProcessor.setLoopEnabled(true);
+
+            processor.midiProcessor.play();
+
+            // Track browser playback state
+            browserPlaybackActive = true;
+            currentlyPlayingFile = file;
+
+            DBG("Playing file in LOOP: " + file.getFullPathName() + " at " + juce::String(headerBPM, 2) + " BPM, duration: " + juce::String(fileDuration, 2) + "s");
+        }
     }
 }
 
@@ -1056,9 +1098,49 @@ juce::File GrooveBrowser::getCurrentFileForRow(int columnIndex, int row)
     return juce::File();
 }
 
+bool GrooveBrowser::keyPressed(const juce::KeyPress& key, juce::Component*)
+{
+    return keyPressed(key);
+}
+
 bool GrooveBrowser::keyPressed(const juce::KeyPress& key)
 {
-    // Handle navigation keys
+    // Only handle keyboard events if GrooveBrowser or its children have focus
+    if (!hasKeyboardFocus(true))
+        return false;
+
+    // Handle space bar to stop/resume playback (only when GrooveBrowser has focus)
+    if (key.getKeyCode() == juce::KeyPress::spaceKey)
+    {
+        if (processor.midiProcessor.isPlaying())
+        {
+            // Stop playback
+            processor.midiProcessor.pause();
+            browserPlaybackActive = false;
+            DBG("GrooveBrowser: Space bar pressed - Pausing playback");
+        }
+        else if (browserPlaybackActive && currentlyPlayingFile.existsAsFile())
+        {
+            // Resume playback
+            processor.midiProcessor.play();
+            DBG("GrooveBrowser: Space bar pressed - Resuming playback");
+        }
+        return true;  // Consume the event so it doesn't reach DAW
+    }
+
+    // Handle arrow keys for navigation
+    if (key.getKeyCode() == juce::KeyPress::downKey)
+    {
+        navigateToNextMidiFile();
+        return true;  // Consume the event
+    }
+
+    if (key.getKeyCode() == juce::KeyPress::upKey)
+    {
+        navigateToPreviousMidiFile();
+        return true;  // Consume the event
+    }
+
     return false;
 }
 
@@ -1635,4 +1717,118 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
             "Export failed - file is empty or could not be created.",
             "OK");
     }
+}
+
+// NEW: Helper to get the active file column (rightmost column with MIDI files)
+BrowserColumn* GrooveBrowser::getActiveFileColumn()
+{
+    // Find the rightmost column that contains MIDI files (not folders)
+    for (int i = folderColumns.size() - 1; i >= 0; --i)
+    {
+        auto* column = folderColumns[i];
+        // Check if this column has any MIDI files
+        for (int j = 0; j < column->itemFiles.size(); ++j)
+        {
+            if (!column->itemIsFolder[j] && column->itemFiles[j].hasFileExtension(".mid;.midi"))
+            {
+                return column;  // Found a column with MIDI files
+            }
+        }
+    }
+    return nullptr;
+}
+
+// NEW: Helper to play a file at a specific row in a column
+void GrooveBrowser::playFileAtRow(BrowserColumn* column, int row)
+{
+    if (!column || row < 0 || row >= column->itemFiles.size())
+        return;
+
+    if (column->itemIsFolder[row])
+        return;  // Don't play folders
+
+        juce::File file = column->itemFiles[row];
+    if (file.existsAsFile() && file.hasFileExtension(".mid;.midi"))
+    {
+        // Select the row
+        column->selectRow(row);
+
+        // Play the file
+        handleFileDoubleClick(file);
+
+        DBG("GrooveBrowser: Arrow key navigation - Playing: " + file.getFileName());
+    }
+}
+
+// NEW: Navigate to next MIDI file using down arrow
+void GrooveBrowser::navigateToNextMidiFile()
+{
+    auto* activeColumn = getActiveFileColumn();
+    if (!activeColumn)
+        return;
+
+    int currentRow = activeColumn->getSelectedRow();
+    int numRows = activeColumn->getNumRows();
+
+    // Find next MIDI file (skip folders)
+    for (int i = currentRow + 1; i < numRows; ++i)
+    {
+        if (!activeColumn->itemIsFolder[i] &&
+            activeColumn->itemFiles[i].hasFileExtension(".mid;.midi"))
+        {
+            playFileAtRow(activeColumn, i);
+            return;
+        }
+    }
+
+    // If we reached the end, wrap to the first MIDI file
+    for (int i = 0; i <= currentRow; ++i)
+    {
+        if (!activeColumn->itemIsFolder[i] &&
+            activeColumn->itemFiles[i].hasFileExtension(".mid;.midi"))
+        {
+            playFileAtRow(activeColumn, i);
+            return;
+        }
+    }
+}
+
+// NEW: Navigate to previous MIDI file using up arrow
+void GrooveBrowser::navigateToPreviousMidiFile()
+{
+    auto* activeColumn = getActiveFileColumn();
+    if (!activeColumn)
+        return;
+
+    int currentRow = activeColumn->getSelectedRow();
+
+    // Find previous MIDI file (skip folders)
+    for (int i = currentRow - 1; i >= 0; --i)
+    {
+        if (!activeColumn->itemIsFolder[i] &&
+            activeColumn->itemFiles[i].hasFileExtension(".mid;.midi"))
+        {
+            playFileAtRow(activeColumn, i);
+            return;
+        }
+    }
+
+    // If we reached the beginning, wrap to the last MIDI file
+    int numRows = activeColumn->getNumRows();
+    for (int i = numRows - 1; i >= currentRow; --i)
+    {
+        if (!activeColumn->itemIsFolder[i] &&
+            activeColumn->itemFiles[i].hasFileExtension(".mid;.midi"))
+        {
+            playFileAtRow(activeColumn, i);
+            return;
+        }
+    }
+}
+
+void GrooveBrowser::mouseDown(const juce::MouseEvent& e)
+{
+    // Grab keyboard focus when user clicks in the GrooveBrowser
+    grabKeyboardFocus();
+    DBG("GrooveBrowser: Grabbed keyboard focus");
 }

@@ -7,69 +7,74 @@ class MultiTrackContainer;
 class TimelineManager;
 
 class TimelineControls : public juce::Component,
-                         public juce::Button::Listener,
-                         public juce::Slider::Listener,
-                         public juce::ChangeListener,
-                         private juce::Timer
-{
-public:
-    TimelineControls(DrumGrooveProcessor& processor, MultiTrackContainer& container);
-    ~TimelineControls() override;
+public juce::Button::Listener,
+    public juce::Slider::Listener,
+        public juce::ChangeListener,
+            private juce::Timer
+            {
+            public:
+                TimelineControls(DrumGrooveProcessor& processor, MultiTrackContainer& container);
+                ~TimelineControls() override;
 
-    void paint(juce::Graphics& g) override;
-    void resized() override;
-    void buttonClicked(juce::Button* button) override;
-    void sliderValueChanged(juce::Slider* slider) override;
-    void changeListenerCallback(juce::ChangeBroadcaster* source) override;
-    
-    void setLoopStartTime(double timeInSeconds);
-    void setLoopEndTime(double timeInSeconds);
+                void paint(juce::Graphics& g) override;
+                void resized() override;
+                void buttonClicked(juce::Button* button) override;
+                void sliderValueChanged(juce::Slider* slider) override;
+                void changeListenerCallback(juce::ChangeBroadcaster* source) override;
 
-private:
-    DrumGrooveProcessor& processor;
-    MultiTrackContainer& container;
-    std::unique_ptr<TimelineManager> timelineManager;
+                void setLoopStartTime(double timeInSeconds);
+                void setLoopEndTime(double timeInSeconds);
 
-    juce::TextButton fileButton;
-    juce::TextButton addButton;
-    juce::TextButton removeButton;
+            private:
+                DrumGrooveProcessor& processor;
+                MultiTrackContainer& container;
+                std::unique_ptr<TimelineManager> timelineManager;
 
-    juce::TextButton playButton, pauseButton, stopButton;
-    juce::TextButton loopButton;
+                juce::TextButton fileButton;
+                juce::TextButton addButton;
+                juce::TextButton removeButton;
 
-    juce::Label timeDisplay;
+                juce::TextButton playButton, pauseButton, stopButton;
+                juce::TextButton loopButton;
 
-    juce::Label loopStartLabel, loopEndLabel;
-    juce::TextEditor loopStartField, loopEndField;
+                juce::Label timeDisplay;
 
-    juce::Label speedLabel;
-    juce::Slider speedSlider;
+                juce::Label loopStartLabel, loopEndLabel;
+                juce::TextEditor loopStartField, loopEndField;
 
-    juce::TextButton zoomInButton, zoomOutButton, fitButton;
-    juce::Slider zoomSlider;
+                juce::Label speedLabel;
+                juce::Slider speedSlider;
 
-    static constexpr int FILE_BUTTONS_WIDTH = 180;
-    static constexpr int SEPARATOR_WIDTH = 2;
-    static constexpr int LEFT_MARGIN = 10;
+                juce::Label latencyLabel;
+                juce::TextEditor latencyOffsetField;
 
-    void timerCallback() override;
-    
-    void updateTimeDisplay();
-    void updateZoomDisplay();
-    void updateTransportButtons();
-    void updateLoopButton();
-    void updateLoopTimeFields();
-    void handleLoopStartChange();
-    void handleLoopEndChange();
+                juce::TextButton zoomInButton, zoomOutButton, fitButton;
+                juce::Slider zoomSlider;
 
-    void showFileMenu();
-    void showExportMenu();
-    void onAddFile();
-    void onRemoveFile();
+                static constexpr int FILE_BUTTONS_WIDTH = 180;
+                static constexpr int SEPARATOR_WIDTH = 2;
+                static constexpr int LEFT_MARGIN = 10;
 
-    static juce::String formatTime(double seconds);
-    static double parseTime(const juce::String& timeStr);
-    static bool isValidTimeFormat(const juce::String& timeStr);
+                void timerCallback() override;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TimelineControls)
-};
+                void updateTimeDisplay();
+                void updateZoomDisplay();
+                void updateTransportButtons();
+                void updateLoopButton();
+                void updateLoopTimeFields();
+                void handleLoopStartChange();
+                void handleLoopEndChange();
+                void handleLatencyOffsetChange();
+                void updateLatencyOffsetField();
+
+                void showFileMenu();
+                void showExportMenu();
+                void onAddFile();
+                void onRemoveFile();
+
+                static juce::String formatTime(double seconds);
+                static double parseTime(const juce::String& timeStr);
+                static bool isValidTimeFormat(const juce::String& timeStr);
+
+                JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(TimelineControls)
+            };

@@ -35,8 +35,16 @@ DrumGroovePro MIDI drum groove workstation designed for producers, composers, an
 - **Solo/Mute**: Standard track controls for playback management
 - **Playhead Speed control**: Chnage the speed of playing to make further adjustments
 
+###  **IVisual Latency Compensation**
+
+- Adjustable from -200ms to 0ms
+- Compensates for system/hardware audio latency
+- Negative values make visual playhead lag behind audio (normal)
+- Default: -20ms
+- Controlled via Latency field in timeline controls
+
 ###  **Intelligent Drum Remapping**
-- **16 Supported Libraries**:
+- **18 Supported Libraries**:
  -  GeneralMIDI
  -  SuperiorDrummer3
  -  AddictiveDrums2
@@ -52,8 +60,11 @@ DrumGroovePro MIDI drum groove workstation designed for producers, composers, an
  -  KrimhDrums
  -  TheMonarchKit
  -  ShreddageDrums
- -  Damage2 
-- **Seamless Conversion**: Drag a Superior Drummer groove onto a track set to EZdrummer—notes are automatically remapped!
+ -  Damage2
+ -  Triaz
+ -  MODO Drum
+ -  
+**Seamless Conversion**: Drag a Superior Drummer groove onto a track set to EZdrummer—notes are automatically remapped.
 
 ###  **Project Management**
 - **Save/Load Timeline State**: Save complete timeline arrangements with all tracks, clips, and BPM settings
@@ -70,6 +81,20 @@ DrumGroovePro MIDI drum groove workstation designed for producers, composers, an
 - **Storage**: 50 MB for plugin installation
 - **DAW**: Any VST3-compatible host (Reaper, FL Studio, Ableton Live, Cubase, Studio One, etc.)
 
+### Linux
+- **OS**: Tested on Arch Linu and Fedora (64-bit)
+- **CPU**: Intel Core i5 / AMD Ryzen 5 or better
+- **RAM**: 4 GB minimum, 8 GB recommended
+- **Storage**: 50 MB for plugin installation
+- **DAW**: Any VST3-compatible host (Reaper, Ardour, Carla, etc)
+
+### MacOS
+
+- **OS**: macOS 10.15 (Catalina) or later
+- **CPU**: Intel Core i5 or Apple Silicon (M1/M2/M3/M4) or better
+- **RAM**: 4 GB minimum, 8 GB recommended
+- **Storage**: 50 MB for plugin installation
+- **DAW**: Any VST3-compatible host (Logic Pro, GarageBand, Reaper, Ableton Live, Cubase, Studio One, etc.)
 
 ---
 
@@ -93,13 +118,31 @@ DrumGroovePro MIDI drum groove workstation designed for producers, composers, an
 
 5. **Load** DrumGroovePro as a MIDI effect on any track
 
+
+### Quick Install (Linux)
+
+1. **Download** the latest release from the [Releases page](https://github.com/InToEtherion/DrumGroovePro/releases)
+
+2. **Extract** the ZIP file:
+   ```
+   DrumGroovePro_vX.X.X_Linux_x64.zip
+   ```
+
+3. **Copy** `DrumGroovePro.vst3` to your VST3 folder:
+   ```
+   ~/.vst3/
+   ```
+
+4. **Restart** your DAW and scan for new plugins
+
+5. **Load** DrumGroovePro as a MIDI effect on any track
 ---
 
 ##  Quick Start Guide
 
 ###  **Add Your Groove Library**
 
-1. Click the **"+"** button in the Folder Panel (left side)
+1. Click the **ADD FOLDER** button in the Folder Panel (left side)
 2. Browse to your MIDI groove folder
 3. Select the source drum library (e.g., "Superior Drummer 3")
 4. Click **"ADD TO LIBRARY"**
@@ -125,7 +168,7 @@ The plugin will scan all MIDI files in that folder and its subfolders.
 3. The clip appears with visual MIDI preview
 
 #### Option B: Drag to DAW
-1. **Drag** a MIDI file from the browser (With "Control" Pressed)
+1. **Drag** a MIDI file from the browser (With "Control" Pressed) or form Timeline with "control + Alt" pressed.
 2. **Drop** directly onto a Reaper track 
 3. MIDI file is imported at the current plugin BPM setting
 
@@ -181,18 +224,55 @@ The plugin will scan all MIDI files in that folder and its subfolders.
 
 ## Building from Source
 
-### Prerequisites
+### Platform-Specific Requirements
+### Windows
+
+Visual Studio 2019 or later
+Windows SDK
+
+### macOS
+
+Xcode 12 or later
+macOS 10.13 or higher
+For Universal Binary (Intel + Apple Silicon):
+
+Xcode 12.2+ on macOS 11+ recommended
+
+### Linux
+
+GCC 9+ or Clang 10+
+Development libraries:
+
+# Ubuntu/Debian
+  sudo apt-get install build-essential cmake libasound2-dev libjack-jackd2-dev \
+      libfreetype6-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+      libxinerama-dev libxrandr-dev libxrender-dev libwebkit2gtk-4.0-dev \
+      libglu1-mesa-dev mesa-common-dev
+  
+  # Fedora
+  sudo dnf install cmake gcc-c++ alsa-lib-devel jack-audio-connection-kit-devel \
+      freetype-devel libX11-devel libXcomposite-devel libXcursor-devel \
+      libXext-devel libXinerama-devel libXrandr-devel libXrender-devel \
+      webkit2gtk3-devel mesa-libGLU-devel
+  
+  # Arch Linux
+  sudo pacman -S base-devel cmake alsa-lib jack freetype2 libx11 \
+      libxcomposite libxcursor libxext libxinerama libxrandr \
+      libxrender webkit2gtk glu
+
+### Prerequisites 
 
 - **CMake** 3.22 or higher
 - **Visual Studio 2022** (Windows)
 - **JUCE** 8+ (included as submodule)
 - **Git**
 
+
 ### Build Steps
 
 ```bash
-# Initialize JUCE submodule
-git submodule update --init --recursive
+# Clone JUCE
+git clone --recursive https://github.com/juce-framework/JUCE.git
 
 # Clone repository
 git clone https://github.com/InToEtherion/DrumGroovePro.git
@@ -208,8 +288,14 @@ cmake ..
 # Build (Release mode)
 cmake --build . --config Release --parallel
 
-# Plugin output location:
-# build/DrumGroovePro_artefacts/Release/VST3/DrumGroovePro.vst3
+**MacOS**
+Universal Binary Build (Intel + Apple Silicon)
+
+# Configure with Universal Binary flag
+cmake -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" ..
+
+# Build
+cmake --build . --config Release --parallel
 ```
 
 ### Project Structure
