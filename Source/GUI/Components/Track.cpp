@@ -74,35 +74,36 @@ class TrackMoveClipsCommand : public TrackCommand
 {
 public:
     TrackMoveClipsCommand(Track* t, const std::vector<std::pair<juce::String, double>>& moves)
-    : track(t), clipMoves(moves) {}
-
-    void execute() override {
-        if (oldPositions.empty()) {
-            // First execution - save old positions
-            for (const auto& [id, newTime] : clipMoves) {
-                for (auto& clip : track->clips) {
-                    if (clip->id == id) {
-                        oldPositions.push_back({id, clip->startTime});
-                        clip->startTime = newTime;
-                        break;
-                    }
-                }
-            }
-        } else {
-            // Redo - apply new positions
-            for (const auto& [id, newTime] : clipMoves) {
-                for (auto& clip : track->clips) {
-                    if (clip->id == id) {
-                        clip->startTime = newTime;
-                        break;
-                    }
+    : track(t), clipMoves(moves) 
+    {
+        // CRITICAL FIX: Save old positions in constructor, not in execute()
+        // This ensures undo works even when executeNow = false
+        for (const auto& [id, newTime] : clipMoves) {
+            for (auto& clip : track->clips) {
+                if (clip->id == id) {
+                    oldPositions.push_back({id, clip->startTime});
+                    break;
                 }
             }
         }
+    }
+
+    void execute() override {
+        // Apply new positions
+        for (const auto& [id, newTime] : clipMoves) {
+            for (auto& clip : track->clips) {
+                if (clip->id == id) {
+                    clip->startTime = newTime;
+                    break;
+                }
+            }
+        }
+        track->container.updateTimelineSize();
         track->repaint();
     }
 
     void undo() override {
+        // Restore old positions
         for (const auto& [id, oldTime] : oldPositions) {
             for (auto& clip : track->clips) {
                 if (clip->id == id) {
@@ -111,13 +112,14 @@ public:
                 }
             }
         }
+        track->container.updateTimelineSize();
         track->repaint();
     }
 
 private:
     Track* track;
-    std::vector<std::pair<juce::String, double>> clipMoves;
-    std::vector<std::pair<juce::String, double>> oldPositions;
+    std::vector<std::pair<juce::String, double>> clipMoves;  // New positions
+    std::vector<std::pair<juce::String, double>> oldPositions; // Old positions for undo
 };
 
 class TrackResizeClipCommand : public TrackCommand
@@ -520,7 +522,7 @@ void Track::handleMidiFileDrop(const juce::StringArray& parts, const juce::Point
         }
     }
 
-    // FIXED: Read the original BPM from the MIDI file
+    // Read the original BPM from the MIDI file
     double originalBPM = 120.0;
     {
         juce::FileInputStream bpmStream(file);
@@ -549,6 +551,22 @@ void Track::handleMidiFileDrop(const juce::StringArray& parts, const juce::Point
         }
     }
 
+    // NEW: Extract header BPM from drag description if available (from GrooveBrowser)
+    // Format: filename|fullPath|headerBPM
+    double headerBPM = originalBPM;  // Default to file's BPM if not provided
+    if (parts.size() >= 3)
+    {
+        headerBPM = parts[2].getDoubleValue();
+        if (headerBPM > 0)
+        {
+            DBG("Using header BPM from GrooveBrowser: " + juce::String(headerBPM, 2));
+        }
+        else
+        {
+            headerBPM = originalBPM;  // Fallback if parse fails
+        }
+    }
+
     // Create new clip
     MidiClip newClip;
     newClip.name = filename;
@@ -556,30 +574,37 @@ void Track::handleMidiFileDrop(const juce::StringArray& parts, const juce::Point
     newClip.startTime = dropTime;
     newClip.colour = ColourPalette::primaryBlue.withAlpha(0.7f);
 
-    // FIXED: Store the MIDI file's original BPM and source library
+    // Store the MIDI file's original BPM and header BPM for inheritance
     newClip.originalBPM = originalBPM;
-    newClip.referenceBPM = originalBPM;  // Reference is the original BPM, not track BPM
-    newClip.sourceLibrary = sourceLib;  // NEW: Store detected source library
+    newClip.referenceBPM = originalBPM;
+    newClip.sourceLibrary = sourceLib;
 
-    DBG("Dropped MIDI: " + filename + " - Original BPM: " + juce::String(originalBPM, 2) +
-    ", Source Library: " + DrumLibraryManager::getLibraryName(sourceLib));
+    // Store header BPM in a temporary variable for inheritance
+    newClip.headerBPM = headerBPM;
 
-    // Calculate duration at original BPM
+    // Calculate actual duration from MIDI file
     double duration = 4.0;
     if (calculateMidiFileDuration(file, duration))
     {
         newClip.duration = duration;
+        DBG("Calculated MIDI duration: " + juce::String(duration, 3) + "s at " +
+        juce::String(originalBPM, 2) + " BPM");
     }
     else
     {
         newClip.duration = 4.0;
+        DBG("Failed to calculate duration, using default 4.0s");
     }
 
-    DBG("Clip duration: " + juce::String(duration, 3) + "s at " + juce::String(originalBPM, 2) + " BPM");
+    DBG("Dropped MIDI: " + filename);
+    DBG("  Original BPM: " + juce::String(originalBPM, 2));
+    DBG("  Header BPM: " + juce::String(headerBPM, 2));
+    DBG("  Duration: " + juce::String(newClip.duration, 3) + "s");
+    DBG("  Source Library: " + DrumLibraryManager::getLibraryName(sourceLib));
 
     clips.push_back(std::make_unique<MidiClip>(newClip));
 
-    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CRITICAL FIX: Add clip to MidiProcessor immediately if playing
+    // Add clip to MidiProcessor if playing
     if (container.isPlaying())
     {
         double trackBPM = getTrackBPM();
@@ -682,7 +707,7 @@ void Track::handleDrumPartDrop(const juce::StringArray& parts, const juce::Point
 
     clips.push_back(std::make_unique<MidiClip>(newClip));
 
-    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CRITICAL FIX: Add clip to MidiProcessor immediately if playing
+    // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ CRITICAL FIX: Add clip to MidiProcessor immediately if playing
     if (container.isPlaying())
     {
         double trackBPM = getTrackBPM();
@@ -714,6 +739,36 @@ bool Track::createDrumPartMidiFile(const juce::File& originalFile,
     DBG("Original file: " + originalFile.getFullPathName());
     DBG("Part type: " + juce::String(static_cast<int>(partType)));
 
+    // CRITICAL FIX: Read the tempo from the original file BEFORE dissection
+    double originalBPM = 120.0;
+    {
+        juce::FileInputStream bpmStream(originalFile);
+        if (bpmStream.openedOk())
+        {
+            juce::MidiFile tempMidiFile;
+            if (tempMidiFile.readFrom(bpmStream))
+            {
+                for (int t = 0; t < tempMidiFile.getNumTracks(); ++t)
+                {
+                    const auto* track = tempMidiFile.getTrack(t);
+                    if (!track) continue;
+
+                    for (int e = 0; e < track->getNumEvents(); ++e)
+                    {
+                        const auto* event = track->getEventPointer(e);
+                        if (event && event->message.isTempoMetaEvent())
+                        {
+                            originalBPM = 60.0 / event->message.getTempoSecondsPerQuarterNote();
+                            DBG("Found original BPM: " + juce::String(originalBPM, 2));
+                            break;
+                        }
+                    }
+                    if (originalBPM != 120.0) break;
+                }
+            }
+        }
+    }
+
     MidiDissector dissector;
     DrumLibrary targetLib = processor.getTargetLibrary();
 
@@ -734,15 +789,59 @@ bool Track::createDrumPartMidiFile(const juce::File& originalFile,
             outputFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
             .getChildFile("DrumGroovePro_part_" + juce::String(juce::Random::getSystemRandom().nextInt()) + ".mid");
 
+            // CRITICAL: Get original file's TPQN for proper tick conversion
+            int originalTPQN = 480;  // Default
+            {
+                juce::FileInputStream inputStream(originalFile);
+                if (inputStream.openedOk())
+                {
+                    juce::MidiFile tempMidi;
+                    if (tempMidi.readFrom(inputStream))
+                    {
+                        originalTPQN = tempMidi.getTimeFormat();
+                        DBG("Original MIDI file TPQN: " + juce::String(originalTPQN));
+                    }
+                }
+            }
+
             juce::MidiFile midiFileToSave;
-            midiFileToSave.setTicksPerQuarterNote(480);
+            int newTPQN = 480;
+            midiFileToSave.setTicksPerQuarterNote(newTPQN);
 
             juce::MidiMessageSequence trackCopy;
-            for (int i = 0; i < part.sequence.getNumEvents(); ++i)
-            {
-                trackCopy.addEvent(part.sequence.getEventPointer(i)->message);
-            }
-            trackCopy.updateMatchedPairs();
+
+			// CRITICAL FIX: Add tempo meta event FIRST to preserve original BPM
+			double secondsPerQuarterNote = 60.0 / originalBPM;
+			juce::MidiMessage tempoEvent = juce::MidiMessage::tempoMetaEvent(
+				static_cast<int>(secondsPerQuarterNote * 1000000.0)
+			);
+			tempoEvent.setTimeStamp(0.0);  // Add at the beginning
+			trackCopy.addEvent(tempoEvent, 0.0);
+			DBG("Added tempo meta event: " + juce::String(originalBPM, 2) + " BPM");
+			
+			// CRITICAL FIX: Scale timestamps from original TPQN to new TPQN
+			// The dissected part.sequence has timestamps in the ORIGINAL file's tick format
+			// We need to scale them to match our new TPQN (480)
+			// Formula: newTicks = oldTicks * (newTPQN / originalTPQN)
+			double tickScaleFactor = static_cast<double>(newTPQN) / static_cast<double>(originalTPQN);
+			
+			DBG("Tick scale factor: " + juce::String(tickScaleFactor, 4) + 
+			    " (from " + juce::String(originalTPQN) + " to " + juce::String(newTPQN) + " TPQN)");
+			
+			// Copy all note events from the dissected part with tick scaling
+			for (int i = 0; i < part.sequence.getNumEvents(); ++i)
+			{
+				auto originalEvent = part.sequence.getEventPointer(i)->message;
+				double oldTicks = originalEvent.getTimeStamp();
+				double newTicks = oldTicks * tickScaleFactor;
+				
+				// Create new message with scaled timestamp
+				auto convertedEvent = originalEvent;
+				convertedEvent.setTimeStamp(newTicks);
+				
+				trackCopy.addEvent(convertedEvent);
+			}
+			trackCopy.updateMatchedPairs();
 
             midiFileToSave.addTrack(trackCopy);
 
@@ -789,41 +888,68 @@ bool Track::calculateMidiFileDuration(const juce::File& file, double& duration) 
     if (ticksPerQuarterNote <= 0)
         ticksPerQuarterNote = 480.0;
 
-    // FIXED: Read the actual BPM from the MIDI file instead of hardcoding 120
+    // Read BPM and time signature
     double midiFileBPM = 120.0;
+    int timeSignatureNumerator = 4;
+    int timeSignatureDenominator = 4;
+
     for (int t = 0; t < midiFile.getNumTracks(); ++t)
     {
-        const juce::MidiMessageSequence* track = midiFile.getTrack(t);
+        auto* track = const_cast<juce::MidiMessageSequence*>(midiFile.getTrack(t));
         if (!track) continue;
+
+        track->updateMatchedPairs();
 
         for (int e = 0; e < track->getNumEvents(); ++e)
         {
             const auto* event = track->getEventPointer(e);
-            if (event && event->message.isTempoMetaEvent())
+            if (!event) continue;
+
+            if (event->message.isTempoMetaEvent())
             {
                 midiFileBPM = 60.0 / event->message.getTempoSecondsPerQuarterNote();
-                break;
+            }
+            else if (event->message.isTimeSignatureMetaEvent())
+            {
+                event->message.getTimeSignatureInfo(timeSignatureNumerator, timeSignatureDenominator);
             }
         }
-        if (midiFileBPM != 120.0) break;
     }
 
-    double maxTimeStamp = 0;
+    // Find max time across ALL tracks and ALL events (including note-offs)
+    double maxTimeInTicks = 0;
+
     for (int t = 0; t < midiFile.getNumTracks(); ++t)
     {
-        const juce::MidiMessageSequence* track = midiFile.getTrack(t);
-        if (track && track->getNumEvents() > 0)
+        auto* track = const_cast<juce::MidiMessageSequence*>(midiFile.getTrack(t));
+        if (!track) continue;
+
+        track->updateMatchedPairs();
+
+        for (int e = 0; e < track->getNumEvents(); ++e)
         {
-            auto lastEvent = track->getEventPointer(track->getNumEvents() - 1);
-            if (lastEvent)
+            double eventTime = track->getEventTime(e);
+            maxTimeInTicks = juce::jmax(maxTimeInTicks, eventTime);
+
+            auto* eventHolder = track->getEventPointer(e);
+            if (eventHolder && eventHolder->noteOffObject != nullptr)
             {
-                maxTimeStamp = juce::jmax(maxTimeStamp, lastEvent->message.getTimeStamp());
+                double noteOffTime = eventHolder->noteOffObject->message.getTimeStamp();
+                maxTimeInTicks = juce::jmax(maxTimeInTicks, noteOffTime);
             }
         }
     }
 
-    // FIXED: Use the actual BPM from the file, not hardcoded 120
-    duration = (maxTimeStamp / ticksPerQuarterNote) * (60.0 / midiFileBPM);
+    // Calculate ticks per bar
+    double ticksPerBar = ticksPerQuarterNote * (4.0 / timeSignatureDenominator) * timeSignatureNumerator;
+
+    // Round UP to the nearest complete bar
+    double numBars = std::ceil(maxTimeInTicks / ticksPerBar);
+    double roundedTicks = numBars * ticksPerBar;
+
+    // Convert to seconds
+    duration = (roundedTicks / ticksPerQuarterNote) * (60.0 / midiFileBPM);
+
     return duration > 0;
 }
 
@@ -1313,6 +1439,7 @@ void Track::itemDragEnter(const SourceDetails& details)
     juce::StringArray parts = juce::StringArray::fromTokens(description, "|", "");
 
     double baseDuration = 4.0;
+    double fileBPM = 120.0;
 
     if (parts.size() >= 2 && parts[1] == "PART")
     {
@@ -1325,18 +1452,25 @@ void Track::itemDragEnter(const SourceDetails& details)
         {
             if (!calculateMidiFileDuration(midiFile, baseDuration))
                 baseDuration = 4.0;
+
+            // Read the actual BPM from the MIDI file
+            fileBPM = getBPMFromMidiFile(midiFile);
         }
     }
 
-    ghostClip->originalBPM = 120.0;
+    // Set the ghost clip's BPM to the file's actual BPM
+    ghostClip->originalBPM = fileBPM;
+    ghostClip->referenceBPM = fileBPM;
     ghostClip->duration = baseDuration;
 
-    adjustGhostClipToTrackBPM();
+    // Don't adjust duration - it's correct as-is
+    // The visual scaling is handled in drawing code
 
     ghostClip->colour = ColourPalette::primaryBlue.withAlpha(0.3f);
 
     DBG("Ghost clip entered track " + juce::String(trackNumber) +
-    " - Duration: " + juce::String(ghostClip->duration, 3) + "s");
+    " - Duration: " + juce::String(ghostClip->duration, 3) + "s" +
+    " at " + juce::String(fileBPM, 2) + " BPM");
 
     repaint();
 }
@@ -1559,7 +1693,27 @@ void Track::adjustGhostClipToTrackBPM()
 
 void Track::inheritBPMFromHeader()
 {
-    DBG("Track " + juce::String(trackNumber) + " - BPM managed by header");
+    // When first MIDI is dropped on empty track, update track BPM to match MIDI's header BPM
+    if (!clips.empty())
+    {
+        const auto& firstClip = clips.front();
+        // Use headerBPM from GrooveBrowser (the BPM user was listening to it at)
+        double midiBPM = firstClip->headerBPM;
+
+        DBG("Track " + juce::String(trackNumber) + " inheriting BPM from first MIDI header: " +
+        juce::String(midiBPM, 2) + " BPM");
+
+        // Update track header's BPM controls
+        if (trackNumber > 0 && trackNumber <= container.getNumTracks())
+        {
+            auto* header = container.getTrackHeader(trackNumber - 1);
+            if (header)
+            {
+                header->setTrackBPM(midiBPM);
+                DBG("Updated track " + juce::String(trackNumber) + " BPM to " + juce::String(midiBPM, 2));
+            }
+        }
+    }
 }
 
 // Inter-track operations
@@ -1867,96 +2021,49 @@ void Track::clearAllClips(bool showConfirmation)
     if (clips.empty())
         return;
 
-    if (showConfirmation)
+    // Collect all clips for undo command
+    std::vector<MidiClip> allClips;
+    for (const auto& clip : clips)
     {
-        // Show confirmation dialog
-        juce::AlertWindow::showAsync(
-            juce::MessageBoxOptions()
-            .withIconType(juce::MessageBoxIconType::WarningIcon)
-            .withTitle("Confirm Clear Track")
-            .withMessage("Are you sure you want to clear all clips from this track? This action cannot be undone.")
-            .withButton("Yes")
-            .withButton("No"),
-                                     [this](int result)
-                                     {
-                                         if (result == 1) // Yes button
-                                         {
-                                             // Clear all clips without undo
-                                             for (const auto& clip : clips)
-                                             {
-                                                 processor.midiProcessor.clearClip(clip->id);
-                                                 DBG("Cleared clip from MidiProcessor: " + clip->id);
-                                             }
-                                             clips.clear();
-                                             clearUndoHistory(); // Clear undo history when doing non-undoable action
-                                             container.updateTimelineSize();
-                                             repaint();
-                                         }
-                                     }
-        );
+        allClips.push_back(*clip);
     }
-    else
+    
+    if (!allClips.empty())
     {
-        // Direct clear without confirmation (used internally)
-        for (const auto& clip : clips)
-        {
-            processor.midiProcessor.clearClip(clip->id);
-        }
-        clips.clear();
-        container.updateTimelineSize();
-        repaint();
+        // Clear all clips using the delete command - fully undoable with Ctrl+Z
+        addUndoCommand(std::make_unique<TrackDeleteClipsCommand>(this, allClips));
+        DBG("Cleared " + juce::String(allClips.size()) + " clips from track (undoable)");
     }
 }
 
 void Track::undo()
 {
-    if (canUndo())
-    {
-        currentUndoIndex--;
-        undoStack[currentUndoIndex]->undo();
-    }
+    container.undo();
 }
 
 void Track::redo()
 {
-    if (canRedo())
-    {
-        undoStack[currentUndoIndex]->execute();
-        currentUndoIndex++;
-    }
+    container.redo();
+}
+
+bool Track::canUndo() const
+{
+    return container.canUndo();
+}
+
+bool Track::canRedo() const
+{
+    return container.canRedo();
 }
 
 void Track::addUndoCommand(std::unique_ptr<TrackCommand> command, bool executeNow)
 {
-    // Clear any redo history
-    if (currentUndoIndex < static_cast<int>(undoStack.size()))
-    {
-        undoStack.erase(undoStack.begin() + currentUndoIndex, undoStack.end());
-    }
-
-    // Execute the command only if requested (for delete/add operations)
-    // Move/resize operations have already been applied during mouseDrag
-    if (executeNow)
-    {
-        command->execute();
-    }
-
-    // Add to undo stack
-    undoStack.push_back(std::move(command));
-    currentUndoIndex++;
-
-    // Limit undo stack size
-    while (undoStack.size() > MAX_UNDO_LEVELS)
-    {
-        undoStack.pop_front();
-        currentUndoIndex--;
-    }
+    container.addUndoCommand(std::move(command), executeNow);
 }
 
 void Track::clearUndoHistory()
 {
-    undoStack.clear();
-    currentUndoIndex = 0;
+    container.clearUndoHistory();
 }
 
 bool Track::keyPressed(const juce::KeyPress& key, juce::Component*)
@@ -1969,27 +2076,7 @@ bool Track::keyPressed(const juce::KeyPress& key, juce::Component*)
         return true;
     }
 
-    // Handle Ctrl+Z or Cmd+Z (Undo) - works with both uppercase and lowercase
-    if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown()) &&
-        (key.getKeyCode() == 'Z' || key.getKeyCode() == 'z'))
-    {
-        if (!key.getModifiers().isShiftDown())
-        {
-            undo();
-            return true;
-        }
-    }
-
-    // Handle Ctrl+Y or Cmd+Y or Ctrl+Shift+Z (Redo) - works with both cases
-    if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown()) &&
-        ((key.getKeyCode() == 'Y' || key.getKeyCode() == 'y') ||
-        (key.getModifiers().isShiftDown() && (key.getKeyCode() == 'Z' || key.getKeyCode() == 'z'))))
-    {
-        redo();
-        return true;
-    }
-
-    // Handle Ctrl+A or Cmd+A (Select All) - works with both cases
+    // Handle Ctrl+A or Cmd+A (Select All)
     if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown()) &&
         (key.getKeyCode() == 'A' || key.getKeyCode() == 'a'))
     {
@@ -1997,5 +2084,22 @@ bool Track::keyPressed(const juce::KeyPress& key, juce::Component*)
         return true;
     }
 
+    // CRITICAL FIX: Forward undo/redo to MultiTrackContainer
+    // Ctrl+Z = Undo
+    if (key.isKeyCode('Z') && key.getModifiers().isCtrlDown() && !key.getModifiers().isShiftDown())
+    {
+        container.undo();
+        return true;
+    }
+
+    // Ctrl+Y or Ctrl+Shift+Z = Redo
+    if ((key.isKeyCode('Y') && key.getModifiers().isCtrlDown()) ||
+        (key.isKeyCode('Z') && key.getModifiers().isCtrlDown() && key.getModifiers().isShiftDown()))
+    {
+        container.redo();
+        return true;
+    }
+
+    // Let other keys pass through to MultiTrackContainer
     return false;
 }

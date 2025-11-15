@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(DrumGroovePro VERSION 0.9.5)
+project(DrumGroovePro VERSION 0.9.7)
 
 # C++20 standard
 set(CMAKE_CXX_STANDARD 20)
@@ -31,8 +31,8 @@ juce_add_plugin(DrumGroovePro
     VST3_CATEGORIES "Fx" "Tools"
     DESCRIPTION "MIDI Effect - Drum Groove Manager and MIDI Processor"
     VST3_AUTO_MANIFEST FALSE
-    COMPANY_WEBSITE "https://intoetherion.com"
-    COMPANY_EMAIL "info@intoetherion.com"
+    COMPANY_WEBSITE "https://github.com/InToEtherion/DrumGroovePro/"
+    COMPANY_EMAIL "InToEtherion@protonmail.com"
 )
 
 # Generate JUCE header
@@ -370,20 +370,6 @@ elseif(UNIX AND NOT APPLE)
 endif()
 
 #==============================================================================
-# FIX MODULEINFO.JSON - Remove trailing commas (JUCE bug workaround)
-#==============================================================================
-add_custom_command(TARGET DrumGroovePro_VST3 POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E echo "=== Fixing moduleinfo.json trailing commas ==="
-    COMMAND sed -i 's/false,$/false/g' "${BUILD_VST3_RESOURCES}/moduleinfo.json" || ${CMAKE_COMMAND} -E true
-    COMMAND sed -i 's/true,$/true/g' "${BUILD_VST3_RESOURCES}/moduleinfo.json" || ${CMAKE_COMMAND} -E true
-    COMMAND sed -i 's/\\],$/\\]/g' "${BUILD_VST3_RESOURCES}/moduleinfo.json" || ${CMAKE_COMMAND} -E true
-    COMMAND sed -i 's/},$/}/g' "${BUILD_VST3_RESOURCES}/moduleinfo.json" || ${CMAKE_COMMAND} -E true
-    COMMAND ${CMAKE_COMMAND} -E echo "=== moduleinfo.json fixed ==="
-    COMMENT "Fixing JUCE-generated moduleinfo.json trailing commas"
-    VERBATIM
-)
-
-#==============================================================================
 # RESOURCE COPYING - VST3 Build Directory
 #==============================================================================
 add_custom_command(TARGET DrumGroovePro_VST3 POST_BUILD
@@ -449,12 +435,6 @@ add_custom_command(TARGET DrumGroovePro_VST3 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Resources/background/background.png"
         "${SYSTEM_VST3_RESOURCES}/background/background.png" || ${CMAKE_COMMAND} -E true
-
-    # Fix moduleinfo.json in system folder too
-    COMMAND sed -i 's/false,$/false/g' "${SYSTEM_VST3_RESOURCES}/moduleinfo.json" || ${CMAKE_COMMAND} -E true
-    COMMAND sed -i 's/true,$/true/g' "${SYSTEM_VST3_RESOURCES}/moduleinfo.json" || ${CMAKE_COMMAND} -E true
-    COMMAND sed -i 's/\\],$/\\]/g' "${SYSTEM_VST3_RESOURCES}/moduleinfo.json" || ${CMAKE_COMMAND} -E true
-    COMMAND sed -i 's/},$/}/g' "${SYSTEM_VST3_RESOURCES}/moduleinfo.json" || ${CMAKE_COMMAND} -E true
 
     COMMAND ${CMAKE_COMMAND} -E echo "=== Resources copied to system folder ==="
     COMMAND ${CMAKE_COMMAND} -E echo "System VST3 path: ${SYSTEM_VST3_RESOURCES}"

@@ -307,7 +307,7 @@ juce::var BrowserColumn::getDragSourceDescription(const juce::SparseSet<int>& se
             }
             else
             {
-                // File drag
+                // File drag - include current header BPM for track inheritance
                 juce::String fullPath;
                 if (row < itemFiles.size() && itemFiles[row].existsAsFile())
                 {
@@ -317,7 +317,15 @@ juce::var BrowserColumn::getDragSourceDescription(const juce::SparseSet<int>& se
                 {
                     fullPath = filename;
                 }
-                return juce::var(filename + "|" + fullPath);
+
+                // Get current header BPM (sync to host or manual)
+                bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
+                double headerBPM = syncToHost ?
+                processor.getHostBPM() :
+                processor.parameters.getRawParameterValue("manualBPM")->load();
+
+                // Format: filename|fullPath|headerBPM
+                return juce::var(filename + "|" + fullPath + "|" + juce::String(headerBPM, 2));
             }
         }
     }
@@ -971,15 +979,85 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
         juce::FileInputStream stream(file);
         if (midiFile.readFrom(stream))
         {
-            double fileDuration = midiFile.getLastTimestamp();
+            double ticksPerQuarterNote = midiFile.getTimeFormat();
+            if (ticksPerQuarterNote <= 0)
+            {
+                ticksPerQuarterNote = 480.0;
+            }
+
+            // Read actual BPM from file
+            double fileBPM = 120.0;
+            // Read BPM and time signature
+            int timeSignatureNumerator = 4;
+            int timeSignatureDenominator = 4;
+
+            for (int t = 0; t < midiFile.getNumTracks(); ++t)
+            {
+                auto* track = const_cast<juce::MidiMessageSequence*>(midiFile.getTrack(t));
+                if (!track) continue;
+
+                track->updateMatchedPairs();
+
+                for (int e = 0; e < track->getNumEvents(); ++e)
+                {
+                    const auto* event = track->getEventPointer(e);
+                    if (!event) continue;
+
+                    if (event->message.isTempoMetaEvent())
+                    {
+                        fileBPM = 60.0 / event->message.getTempoSecondsPerQuarterNote();
+                    }
+                    else if (event->message.isTimeSignatureMetaEvent())
+                    {
+                        event->message.getTimeSignatureInfo(timeSignatureNumerator, timeSignatureDenominator);
+                    }
+                }
+            }
+
+            // Find max time across ALL tracks and ALL events (including note-offs)
+            double maxTimeInTicks = 0;
+
+            for (int t = 0; t < midiFile.getNumTracks(); ++t)
+            {
+                auto* track = const_cast<juce::MidiMessageSequence*>(midiFile.getTrack(t));
+                if (!track) continue;
+
+                track->updateMatchedPairs();
+
+                for (int e = 0; e < track->getNumEvents(); ++e)
+                {
+                    double eventTime = track->getEventTime(e);
+                    maxTimeInTicks = juce::jmax(maxTimeInTicks, eventTime);
+
+                    // Also check note-off times
+                    auto* eventHolder = track->getEventPointer(e);
+                    if (eventHolder && eventHolder->noteOffObject != nullptr)
+                    {
+                        double noteOffTime = eventHolder->noteOffObject->message.getTimeStamp();
+                        maxTimeInTicks = juce::jmax(maxTimeInTicks, noteOffTime);
+                    }
+                }
+            }
+
+            // Calculate ticks per bar and round UP to complete bars
+            double ticksPerBar = ticksPerQuarterNote * (4.0 / timeSignatureDenominator) * timeSignatureNumerator;
+            double numBars = std::ceil(maxTimeInTicks / ticksPerBar);
+            double roundedTicks = numBars * ticksPerBar;
+
+            double fileDurationInSeconds = (roundedTicks / ticksPerQuarterNote) * (60.0 / fileBPM);
+
+            // Ensure minimum duration
+            fileDurationInSeconds = juce::jmax(0.1, fileDurationInSeconds);
 
             // NEW: Enable loop by default for browser playback
-            // Add the clip with proper duration
-            processor.midiProcessor.addMidiClip(file, 0.0, sourceLib, 120.0, headerBPM, 0, fileDuration, "preview_" + juce::Uuid().toString());
+            // Add the clip with proper duration IN SECONDS
+            processor.midiProcessor.addMidiClip(file, 0.0, sourceLib, 120.0, headerBPM, 0,
+                                                fileDurationInSeconds,
+                                                "preview_" + juce::Uuid().toString());
             processor.midiProcessor.setPlayheadPosition(0.0);
 
-            // NEW: Set loop range to file duration and enable looping
-            processor.midiProcessor.setLoopRange(0.0, fileDuration);
+            // NEW: Set loop range to file duration IN SECONDS and enable looping
+            processor.midiProcessor.setLoopRange(0.0, fileDurationInSeconds);
             processor.midiProcessor.setLoopEnabled(true);
 
             processor.midiProcessor.play();
@@ -988,10 +1066,15 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
             browserPlaybackActive = true;
             currentlyPlayingFile = file;
 
-            DBG("Playing file in LOOP: " + file.getFullPathName() + " at " + juce::String(headerBPM, 2) + " BPM, duration: " + juce::String(fileDuration, 2) + "s");
+            DBG("Playing file in LOOP: " + file.getFullPathName() +
+            " at " + juce::String(headerBPM, 2) + " BPM" +
+            ", ticks: " + juce::String(maxTimeInTicks, 0) +
+            ", PPQN: " + juce::String(ticksPerQuarterNote, 0) +
+            ", duration: " + juce::String(fileDurationInSeconds, 3) + "s");
         }
     }
 }
+
 
 void GrooveBrowser::handleColumnDoubleClick(int columnIndex, int row)
 {
@@ -1601,7 +1684,7 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     if (needsAdjustment)
     {
 
-        // Ã¢Å“â€¦ CORRECTED: originalBPM / currentBPM (was backwards!)
+        // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CORRECTED: originalBPM / currentBPM (was backwards!)
         double timeStretchRatio = originalBPM / currentBPM;
 
         // Create adjusted MIDI file
@@ -1689,7 +1772,7 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
         juce::String message = "MIDI file exported to Desktop";
         if (needsAdjustment)
         {
-            message += "\n\nBPM adjusted: " + juce::String(originalBPM, 1) + " Ã¢â€ â€™ " + juce::String(currentBPM, 1);
+            message += "\n\nBPM adjusted: " + juce::String(originalBPM, 1) + " ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ " + juce::String(currentBPM, 1);
         }
         message += "\n\nFile: " + exportFile.getFileName();
 

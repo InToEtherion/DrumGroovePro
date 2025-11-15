@@ -1,5 +1,5 @@
 #include "FolderPanel.h"
-#include "Timeline.h"
+
 #include "AddFolderDialog.h"
 #include "AboutDialog.h"
 #include "../LookAndFeel/ColourPalette.h"

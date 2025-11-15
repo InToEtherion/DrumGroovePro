@@ -26,7 +26,8 @@ enum class DrumLibrary
     ShreddageDrums = 16,
     Damage2 = 17,
     Triaz = 18,
-    MODODrum = 19
+    MODODrum = 19,
+    DrumLocker = 20
 };
 
 class DrumLibraryManager

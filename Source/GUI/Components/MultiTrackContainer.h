@@ -147,7 +147,7 @@ public juce::Timer,
                     double getPlayheadPosition() const;
                     bool isPlaying() const { return playing; }
 
-                    void setZoom(float pixelsPerSecond);
+                    void setZoom(float pixelsPerSecond, float mouseX = -1.0f);
                     float getZoom() const { return zoomLevel; }
                     void fitToContent();
                     void updateTimelineSize();
@@ -182,6 +182,7 @@ public juce::Timer,
                     double snapToGrid(double time) const;
 
                     Track* getTrack(int index) const;
+                    TrackHeader* getTrackHeader(int index) const;
                     int getNumTracks() const { return static_cast<int>(tracks.size()); }
                     void addTrack();
                     void removeTrack(int trackIndex);
@@ -201,6 +202,14 @@ public juce::Timer,
                     void deselectAllClips();
                     void deleteSelectedClips();
                     void clearAllTracks();
+					
+					// Global Undo/Redo system
+					void undo();
+					void redo();
+					bool canUndo() const;
+					bool canRedo() const;
+					void addUndoCommand(std::unique_ptr<TrackCommand> command, bool executeNow = true);
+					void clearUndoHistory();
 
                     void copySelectedClips();
                     void cutSelectedClips();
@@ -221,7 +230,7 @@ public juce::Timer,
                     static constexpr int TRACK_HEIGHT = 80;
                     static constexpr int RULER_HEIGHT = 30;
                     static constexpr double MIN_TIMELINE_WIDTH_SECONDS = 120.0;
-                    static constexpr double BUFFER_TIME = 60.0;
+                    static constexpr double BUFFER_TIME = 300.0;  // Extended to avoid visible boundary when zoomed out
 
                 private:
                     DrumGrooveProcessor& processor;
@@ -241,6 +250,10 @@ public juce::Timer,
                     double lastPlaybackTime = 0.0;
                     double playbackSpeed = 1.0;
                     bool autoScrollEnabled = true;
+                    
+                    // Timer optimization - track last playhead position to avoid unnecessary repaints
+                    double lastRenderedPlayheadPosition = -1.0;
+                    static constexpr int TIMER_INTERVAL_MS = 33;  // 30 fps (was 16ms = 62fps)
 
                     float zoomLevel = 100.0f;
                     double gridInterval = 0.5;
@@ -279,6 +292,7 @@ public juce::Timer,
 
                     void timerCallback() override;
                     void updateAutoScroll();
+                    void repaintPlayheadRegion(double oldPosition, double newPosition);
                     double getMaxTime() const;
                     double getTimelineWidthInSeconds() const;
 
@@ -301,6 +315,11 @@ public juce::Timer,
                     bool shouldShowVerticalScrollbar = false;
 
                     bool isUpdatingLayout = false;
+					
+					// Global undo/redo system
+					std::deque<std::unique_ptr<TrackCommand>> undoStack;
+					int currentUndoIndex = 0;
+					static constexpr int MAX_UNDO_LEVELS = 100;
 
                     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(MultiTrackContainer)
                 };

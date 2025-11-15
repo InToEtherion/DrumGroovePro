@@ -20,6 +20,7 @@ struct MidiClip
     double duration = 4.0;
     double originalBPM = 120.0;
     double referenceBPM = 120.0;
+    double headerBPM = 120.0;  // BPM from GrooveBrowser header (for track inheritance)
     DrumLibrary sourceLibrary = DrumLibrary::Unknown;
     juce::Colour colour;
     bool isSelected = false;
@@ -74,8 +75,8 @@ public juce::DragAndDropTarget,
         // Undo/Redo system
         void undo();
         void redo();
-        bool canUndo() const { return currentUndoIndex > 0; }
-        bool canRedo() const { return currentUndoIndex < static_cast<int>(undoStack.size()); }
+        bool canUndo() const;
+		bool canRedo() const;
         void addUndoCommand(std::unique_ptr<TrackCommand> command, bool executeNow = true);
         void clearUndoHistory();
 
@@ -110,11 +111,6 @@ public juce::DragAndDropTarget,
 
         std::vector<std::unique_ptr<MidiClip>> clips;
         std::unique_ptr<MidiClip> ghostClip;
-
-        // Undo/Redo stacks
-        std::deque<std::unique_ptr<TrackCommand>> undoStack;
-        int currentUndoIndex = 0;
-        static constexpr int MAX_UNDO_LEVELS = 50;
 
         // Interaction state - ALL MEMBER VARIABLES NEEDED
         bool isDragging = false;

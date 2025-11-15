@@ -2,6 +2,7 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 #include "DrumLibraryManager.h"
+#include <atomic>
 
 struct MidiClipPlayback
 {
@@ -41,15 +42,15 @@ public:
     void play();
     void stop();
     void pause();
-    bool isPlaying() const { return playing; }
+    bool isPlaying() const { return playing.load(); }
 
     void setPlayheadPosition(double timeInSeconds);
-    double getPlayheadPosition() const { return playheadPosition; }
+    double getPlayheadPosition() const { return playheadPosition.load(); }
 
     // Get visual playhead position (with configurable latency offset for better sync perception)
     double getVisualPlayheadPosition() const
     {
-        return juce::jmax(0.0, playheadPosition + visualLatencyOffsetSeconds);
+        return juce::jmax(0.0, playheadPosition.load() + visualLatencyOffsetSeconds.load());
     }
 
     void setLoopEnabled(bool enabled) { loopEnabled = enabled; }
@@ -61,10 +62,10 @@ public:
     // Latency offset control - configurable visual delay to compensate for hardware/system latency
     void setVisualLatencyOffset(double milliseconds)
     {
-        visualLatencyOffsetSeconds = milliseconds / 1000.0;
+        visualLatencyOffsetSeconds.store(milliseconds / 1000.0);
     }
 
-    double getVisualLatencyOffsetMs() const { return visualLatencyOffsetSeconds * 1000.0; }
+    double getVisualLatencyOffsetMs() const { return visualLatencyOffsetSeconds.load() * 1000.0; }
 
 private:
     DrumLibraryManager& drumLibraryManager;
@@ -72,13 +73,16 @@ private:
     int samplesPerBlock = 512;
     double currentBPM = 120.0;
 
-    bool playing = false;
+    // THREAD-SAFE: Atomic variables for cross-thread communication (audio thread writes, GUI thread reads)
+    std::atomic<bool> playing { false };
+    std::atomic<double> playheadPosition { 0.0 };
+    std::atomic<double> visualLatencyOffsetSeconds { -0.020 }; // Default -20ms visual delay
+    
+    // Non-atomic: Only accessed from message/GUI thread
     bool loopEnabled = false;
     double loopStart = 0.0;
     double loopEnd = 4.0;
-    double playheadPosition = 0.0;
     double playbackSpeed = 1.0;
-    double visualLatencyOffsetSeconds = -0.020; // Default -20ms visual delay
 
     std::vector<std::unique_ptr<MidiClipPlayback>> activeClips;
     juce::CriticalSection clipLock;

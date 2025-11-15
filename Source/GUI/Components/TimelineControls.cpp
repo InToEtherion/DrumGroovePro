@@ -4,6 +4,7 @@
 #include "../LookAndFeel/ColourPalette.h"
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 #include "../../PluginProcessor.h"
+#include <cmath>  // for std::abs
 
 TimelineControls::TimelineControls(DrumGrooveProcessor& p, MultiTrackContainer& c)
 : processor(p), container(c)
@@ -218,7 +219,7 @@ void TimelineControls::resized()
     bounds.removeFromLeft(25);
 
     // === SPEED CONTROL ===
-    auto speedArea = bounds.removeFromLeft(140);
+    auto speedArea = bounds.removeFromLeft(160);
     speedLabel.setBounds(speedArea.removeFromLeft(45));
     speedSlider.setBounds(speedArea);
 
@@ -234,11 +235,11 @@ void TimelineControls::resized()
     bounds.removeFromLeft(20);
 
     // === ZOOM CONTROLS ===
-    auto zoomArea = bounds.removeFromRight(235);
+    auto zoomArea = bounds.removeFromRight(215);
 
     zoomOutButton.setBounds(zoomArea.removeFromLeft(30));
     zoomArea.removeFromLeft(5);
-    zoomSlider.setBounds(zoomArea.removeFromLeft(120));
+    zoomSlider.setBounds(zoomArea.removeFromLeft(100));
     zoomArea.removeFromLeft(5);
     zoomInButton.setBounds(zoomArea.removeFromLeft(30));
     zoomArea.removeFromLeft(5);
@@ -323,6 +324,7 @@ void TimelineControls::timerCallback()
     updateLoopButton();
     updateLoopTimeFields();
     updateTransportButtons();
+    updateZoomDisplay();  // Keep zoom slider in sync with actual zoom level
 }
 
 void TimelineControls::updateTimeDisplay()
@@ -337,6 +339,14 @@ void TimelineControls::updateTimeDisplay()
 
 void TimelineControls::updateZoomDisplay()
 {
+    // Get current zoom level from container and update slider
+    float currentZoom = container.getZoom();
+    
+    // Only update if the value is different to avoid triggering unnecessary callbacks
+    if (std::abs(zoomSlider.getValue() - currentZoom) > 0.1)
+    {
+        zoomSlider.setValue(currentZoom, juce::dontSendNotification);
+    }
 }
 
 void TimelineControls::updateTransportButtons()

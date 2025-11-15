@@ -271,7 +271,7 @@ Development libraries:
   sudo dnf install cmake gcc-c++ alsa-lib-devel jack-audio-connection-kit-devel \
       freetype-devel libX11-devel libXcomposite-devel libXcursor-devel \
       libXext-devel libXinerama-devel libXrandr-devel libXrender-devel \
-      webkit2gtk3-devel mesa-libGLU-devel
+      mesa-libGLU-devel
   
   # Arch Linux
   sudo pacman -S base-devel cmake alsa-lib jack freetype2 libx11 \
@@ -289,7 +289,7 @@ Development libraries:
 ### Build Steps
 
 ```bash
-# Clone JUCE
+# Clone JUCE (8.0.10)
 git clone --recursive https://github.com/juce-framework/JUCE.git
 
 # Clone repository

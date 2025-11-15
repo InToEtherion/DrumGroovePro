@@ -140,17 +140,17 @@ namespace TimelineUtils
      */
     inline double calculateOptimalGridInterval(float zoomLevel)
     {
-        // FIXED: Professional-grade precision intervals for drum editing
+        // Professional-grade precision intervals for drum editing
         if (zoomLevel < 15)        return 10.0;     // Very zoomed out: 10 seconds
         else if (zoomLevel < 30)   return 5.0;      // 5 seconds
         else if (zoomLevel < 60)   return 2.0;      // 2 seconds  
         else if (zoomLevel < 100)  return 1.0;      // 1 second
         else if (zoomLevel < 150)  return 0.5;      // 500ms
         else if (zoomLevel < 200)  return 0.25;     // 250ms
-        else if (zoomLevel < 280)  return 0.1;      // 100ms ← TARGET FOR DRUM EDITING
+        else if (zoomLevel < 280)  return 0.1;      // 100ms - TARGET FOR DRUM EDITING
         else if (zoomLevel < 350)  return 0.05;     // 50ms
-        else if (zoomLevel < 420)  return 0.025;    // 25ms
-        else                       return 0.01;     // 10ms - ultra precise
+        else if (zoomLevel < 500)  return 0.025;    // 25ms
+        else                       return 0.01;     // 10ms - ultra precise at max zoom (500%)
     }
     
     /**

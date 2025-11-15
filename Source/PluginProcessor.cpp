@@ -216,11 +216,20 @@ void DrumGrooveProcessor::getStateInformation(juce::MemoryBlock& destData)
 
 void DrumGrooveProcessor::setStateInformation(const void* data, int sizeInBytes)
 {
+    // SAFETY: Validate input data
+    if (data == nullptr || sizeInBytes <= 0)
+        return;
+    
     auto xmlState = getXmlFromBinary(data, sizeInBytes);
 
     if (xmlState != nullptr && xmlState->hasTagName(parameters.state.getType()))
     {
         auto newState = juce::ValueTree::fromXml(*xmlState);
+        
+        // SAFETY: Verify the new state is valid before replacing
+        if (!newState.isValid())
+            return;
+        
         parameters.replaceState(newState);
 
         // Find and store GUI state tree IN MEMORY (no restoration yet)
@@ -228,13 +237,18 @@ void DrumGrooveProcessor::setStateInformation(const void* data, int sizeInBytes)
         if (guiChild.isValid())
         {
             guiStateTree = guiChild;
-
         }
 
         // CRITICAL FIX: Force parameter notification to update GUI controls
+        // NOTE: Capturing 'this' is safe here because AudioProcessor deletion happens on message thread
         juce::MessageManager::callAsync([this]()
         {
-            float targetLibValue = parameters.getRawParameterValue("targetLibrary")->load();
+            // SAFETY: Check if parameter exists before accessing
+            auto* targetLibValuePtr = parameters.getRawParameterValue("targetLibrary");
+            if (!targetLibValuePtr)
+                return;
+            
+            float targetLibValue = targetLibValuePtr->load();
 
             DBG("=== VST3 State Loaded ===");
             DBG("Target Library parameter value: " + juce::String(targetLibValue));
@@ -266,31 +280,35 @@ juce::AudioProcessorValueTreeState::ParameterLayout DrumGrooveProcessor::createP
         juce::NormalisableRange<float>(20.0f, 300.0f, 0.1f),
                                                            120.0f));
 
-    // Target Library parameter - UPDATED with all new libraries
+    // Target Library parameter - CRITICAL: Order MUST match enum order (excluding Unknown=0)
+    // This ensures parameter index + 1 = enum value
     juce::StringArray libraryChoices;
-    libraryChoices.add("Addictive Drums 2");           // 0
-    libraryChoices.add("Battery 4");                   // 1
-    libraryChoices.add("BFD3");                        // 2
-    libraryChoices.add("Bypass (No Remapping)");       // 3
-    libraryChoices.add("Damage 2");                    // 4
-    libraryChoices.add("DrumGizmo");                   // 5
-    libraryChoices.add("EZdrummer");                   // 6
-    libraryChoices.add("General MIDI");                // 7
-    libraryChoices.add("GetGood Drums");               // 8
-    libraryChoices.add("Krimh Drums");                 // 9
-    libraryChoices.add("MT Power Drum Kit 2");         // 10
-    libraryChoices.add("Shreddage Drums");             // 11
-    libraryChoices.add("Sitala");                      // 12
-    libraryChoices.add("Steven Slate Drums");          // 13
-    libraryChoices.add("Superior Drummer 3");          // 14
-    libraryChoices.add("The Monarch Kit");             // 15
-    libraryChoices.add("Ugritone");                    // 16
+    libraryChoices.add("Bypass (No Remapping)");       // 0 → Bypass = 1
+    libraryChoices.add("General MIDI");                // 1 → GeneralMIDI = 2
+    libraryChoices.add("Superior Drummer 3");          // 2 → SuperiorDrummer3 = 3
+    libraryChoices.add("Addictive Drums 2");           // 3 → AddictiveDrums2 = 4
+    libraryChoices.add("Battery 4");                   // 4 → Battery4 = 5
+    libraryChoices.add("EZdrummer");                   // 5 → EZdrummer = 6
+    libraryChoices.add("GetGood Drums");               // 6 → GetGoodDrums = 7
+    libraryChoices.add("Steven Slate Drums");          // 7 → StevenSlateDrums = 8
+    libraryChoices.add("Ugritone");                    // 8 → Ugritone = 9
+    libraryChoices.add("BFD3");                        // 9 → BFD3 = 10
+    libraryChoices.add("MT Power Drum Kit 2");         // 10 → MTPowerDrumKit2 = 11
+    libraryChoices.add("DrumGizmo");                   // 11 → DrumGizmo = 12
+    libraryChoices.add("Sitala");                      // 12 → Sitala = 13
+    libraryChoices.add("Krimh Drums");                 // 13 → KrimhDrums = 14
+    libraryChoices.add("The Monarch Kit");             // 14 → TheMonarchKit = 15
+    libraryChoices.add("Shreddage Drums");             // 15 → ShreddageDrums = 16
+    libraryChoices.add("Damage 2");                    // 16 → Damage2 = 17
+    libraryChoices.add("Triaz");                       // 17 → Triaz = 18
+    libraryChoices.add("MODO Drum");                   // 18 → MODODrum = 19
+    libraryChoices.add("Drum Locker");                 // 19 → DrumLocker = 20
 
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         "targetLibrary",
         "Target Library",
         libraryChoices,
-        7)); // Default to "General MIDI" (index 7)
+        1)); // Default to "General MIDI" (index 1 → enum 2)
 
         // Track Solo parameter
         layout.add(std::make_unique<juce::AudioParameterBool>(
@@ -378,19 +396,39 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 
 void DrumGrooveProcessor::saveCompleteGuiState()
 {
-    // Get the complete state from the active editor
-    if (auto* editor = dynamic_cast<DrumGrooveEditor*>(getActiveEditor()))
-    {
-        // Get MainComponent from editor
-        if (auto* mainComp = dynamic_cast<MainComponent*>(editor->getChildComponent(0)))
-        {
-            // Get MultiTrackContainer from MainComponent
-            if (auto* container = mainComp->getMultiTrackContainer())
-            {
-                saveCompleteGuiState(container);
-            }
-        }
-    }
+    // SAFETY: Comprehensive nullptr checking to prevent crashes during state save
+    
+    // Step 1: Check if there's an active editor
+    auto* editor = getActiveEditor();
+    if (!editor)
+        return; // No editor open, nothing to save
+    
+    // Step 2: Try to cast to our specific editor type
+    auto* drumEditor = dynamic_cast<DrumGrooveEditor*>(editor);
+    if (!drumEditor)
+        return; // Not our editor type (shouldn't happen, but be safe)
+    
+    // Step 3: Check if editor has children before accessing child 0
+    if (drumEditor->getNumChildComponents() == 0)
+        return; // Editor not fully initialized yet
+    
+    // Step 4: Get the first child component
+    auto* firstChild = drumEditor->getChildComponent(0);
+    if (!firstChild)
+        return; // Child component doesn't exist
+    
+    // Step 5: Try to cast to MainComponent
+    auto* mainComp = dynamic_cast<MainComponent*>(firstChild);
+    if (!mainComp)
+        return; // First child is not MainComponent (shouldn't happen, but be safe)
+    
+    // Step 6: Get MultiTrackContainer from MainComponent
+    auto* container = mainComp->getMultiTrackContainer();
+    if (!container)
+        return; // MultiTrackContainer not initialized yet
+    
+    // All checks passed - safe to save state
+    saveCompleteGuiState(container);
 }
 
 void DrumGrooveProcessor::saveCompleteGuiState(MultiTrackContainer* container)
@@ -417,20 +455,43 @@ void DrumGrooveProcessor::saveCompleteGuiState(MultiTrackContainer* container)
 
 void DrumGrooveProcessor::restoreCompleteGuiState()
 {
-    // Restore the complete state to the active editor
-    if (auto* editor = dynamic_cast<DrumGrooveEditor*>(getActiveEditor()))
-    {
-        // Get MainComponent from editor
-        if (auto* mainComp = dynamic_cast<MainComponent*>(editor->getChildComponent(0)))
-        {
-            // Get MultiTrackContainer from MainComponent
-            if (auto* container = mainComp->getMultiTrackContainer())
-            {
-                // Restore the complete state tree to MultiTrackContainer
-                container->restoreGuiState(guiStateTree);
-            }
-        }
-    }
+    // SAFETY: Comprehensive nullptr checking to prevent crashes during state restore
+    
+    // Step 1: Check if there's an active editor
+    auto* editor = getActiveEditor();
+    if (!editor)
+        return; // No editor open, nothing to restore
+    
+    // Step 2: Try to cast to our specific editor type
+    auto* drumEditor = dynamic_cast<DrumGrooveEditor*>(editor);
+    if (!drumEditor)
+        return; // Not our editor type (shouldn't happen, but be safe)
+    
+    // Step 3: Check if editor has children before accessing child 0
+    if (drumEditor->getNumChildComponents() == 0)
+        return; // Editor not fully initialized yet
+    
+    // Step 4: Get the first child component
+    auto* firstChild = drumEditor->getChildComponent(0);
+    if (!firstChild)
+        return; // Child component doesn't exist
+    
+    // Step 5: Try to cast to MainComponent
+    auto* mainComp = dynamic_cast<MainComponent*>(firstChild);
+    if (!mainComp)
+        return; // First child is not MainComponent (shouldn't happen, but be safe)
+    
+    // Step 6: Get MultiTrackContainer from MainComponent
+    auto* container = mainComp->getMultiTrackContainer();
+    if (!container)
+        return; // MultiTrackContainer not initialized yet
+    
+    // Step 7: Verify we have valid state to restore
+    if (!guiStateTree.isValid())
+        return; // No valid state to restore
+    
+    // All checks passed - safe to restore state
+    container->restoreGuiState(guiStateTree);
 }
 
 void DrumGrooveProcessor::parameterChanged(const juce::String& parameterID, float newValue)
