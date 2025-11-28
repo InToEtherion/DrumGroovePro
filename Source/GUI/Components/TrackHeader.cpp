@@ -5,7 +5,7 @@
 #include "../../PluginProcessor.h"
 
 TrackHeader::TrackHeader(DrumGrooveProcessor& p, MultiTrackContainer& c, int trackNum)
-    : processor(p), container(c), trackNumber(trackNum)
+: processor(p), container(c), trackNumber(trackNum)
 {
     normalBackgroundColour = ColourPalette::panelBackground;
     mutedBackgroundColour = ColourPalette::secondaryBackground.darker(0.3f);
@@ -23,6 +23,17 @@ TrackHeader::TrackHeader(DrumGrooveProcessor& p, MultiTrackContainer& c, int tra
     trackNameLabel.addListener(this);
     addAndMakeVisible(trackNameLabel);
 
+    // Note Division Label
+    divisionLabel.setText("DIV", juce::dontSendNotification);
+    divisionLabel.setFont(lnf.getSmallFont());
+    divisionLabel.setColour(juce::Label::textColourId, ColourPalette::secondaryText);
+    divisionLabel.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(divisionLabel);
+
+    // Note Division Combo
+    setupDivisionCombo();
+    addAndMakeVisible(divisionCombo);
+
     // BPM label
     bpmLabel.setText("BPM", juce::dontSendNotification);
     bpmLabel.setFont(lnf.getSmallFont());
@@ -30,46 +41,68 @@ TrackHeader::TrackHeader(DrumGrooveProcessor& p, MultiTrackContainer& c, int tra
     bpmLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(bpmLabel);
 
-    // BPM slider
+    // BPM slider (more compact)
     bpmSlider.setRange(40.0, 400.0, 1.0);
-    bpmSlider.setValue(120.0);
+    double currentHeaderBPM = processor.getCurrentEffectiveBPM();
+    bpmSlider.setValue(currentHeaderBPM);
     bpmSlider.setSliderStyle(juce::Slider::LinearHorizontal);
-    bpmSlider.setTextBoxStyle(juce::Slider::NoTextBox, false, 0, 0);
+    bpmSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 40, 20);
     bpmSlider.addListener(this);
     bpmSlider.setTooltip("Track BPM");
     addAndMakeVisible(bpmSlider);
 
-    // BPM text box
-    bpmTextBox.setText("120", juce::dontSendNotification);
-    bpmTextBox.setColour(juce::TextEditor::backgroundColourId, ColourPalette::inputBackground);
-    bpmTextBox.setColour(juce::TextEditor::textColourId, ColourPalette::primaryText);
-    bpmTextBox.setColour(juce::TextEditor::outlineColourId, ColourPalette::borderColour);
-    bpmTextBox.setJustification(juce::Justification::centred);
-    bpmTextBox.setInputRestrictions(3, "0123456789");
-    bpmTextBox.onTextChange = [this]() { updateBPMFromTextBox(); };
-    bpmTextBox.onFocusLost = [this]() { syncBPMControls(bpmSlider.getValue()); };
-    addAndMakeVisible(bpmTextBox);
-
-    // Solo button
-    soloButton.setButtonText("SOLO");
-    soloButton.setColour(juce::ToggleButton::textColourId, ColourPalette::primaryText);
-    soloButton.setColour(juce::ToggleButton::tickColourId, ColourPalette::warningOrange);
-    soloButton.addListener(this);
+    // Solo button (compact) - YELLOW when active
+    soloButton.setButtonText("S");
     soloButton.setTooltip("Solo Track");
+    soloButton.setClickingTogglesState(true);
+    soloButton.addListener(this);
+    // Set colors: Normal and Active (Yellow like playhead)
+    soloButton.setColour(juce::TextButton::buttonColourId, ColourPalette::buttonBackground);
+    soloButton.setColour(juce::TextButton::buttonOnColourId, ColourPalette::yellowPlayhead);
+    soloButton.setColour(juce::TextButton::textColourOnId, juce::Colours::black);
+    soloButton.setColour(juce::TextButton::textColourOffId, ColourPalette::primaryText);
     addAndMakeVisible(soloButton);
 
-    // Mute button
-    muteButton.setButtonText("MUTE");
-    muteButton.setColour(juce::ToggleButton::textColourId, ColourPalette::primaryText);
-    muteButton.setColour(juce::ToggleButton::tickColourId, ColourPalette::errorRed);
-    muteButton.addListener(this);
+    // Mute button (compact) - RED when active
+    muteButton.setButtonText("M");
     muteButton.setTooltip("Mute Track");
+    muteButton.setClickingTogglesState(true);
+    muteButton.addListener(this);
+    // Set colors: Normal and Active (Red)
+    muteButton.setColour(juce::TextButton::buttonColourId, ColourPalette::buttonBackground);
+    muteButton.setColour(juce::TextButton::buttonOnColourId, ColourPalette::errorRed);
+    muteButton.setColour(juce::TextButton::textColourOnId, juce::Colours::white);
+    muteButton.setColour(juce::TextButton::textColourOffId, ColourPalette::primaryText);
     addAndMakeVisible(muteButton);
 
+    // Reset button (compact with dropdown)
+    resetButton.setButtonText("R");
+    resetButton.setTooltip("Reset Options");
+    resetButton.addListener(this);
+    addAndMakeVisible(resetButton);
+
     updateVisualState();
+
+    // Initialize DIV field state based on current mode
+    bool isBarMode = container.isBarMode();
+    setDivisionEnabled(isBarMode);
+    setBPMEnabled(!isBarMode);
 }
 
 TrackHeader::~TrackHeader() = default;
+
+void TrackHeader::setupDivisionCombo()
+{
+    divisionCombo.addItem("1/4", static_cast<int>(NoteDivision::Quarter));
+    divisionCombo.addItem("1/8", static_cast<int>(NoteDivision::Eighth));
+    divisionCombo.addItem("1/16", static_cast<int>(NoteDivision::Sixteenth));
+    divisionCombo.addItem("1/32", static_cast<int>(NoteDivision::ThirtySecond));
+    divisionCombo.addItem("1/128", static_cast<int>(NoteDivision::OneTwentyEighth));
+
+    divisionCombo.setSelectedId(static_cast<int>(NoteDivision::Sixteenth), juce::dontSendNotification);
+    divisionCombo.addListener(this);
+    divisionCombo.setTooltip("Note division for grid snapping");
+}
 
 void TrackHeader::paint(juce::Graphics& g)
 {
@@ -87,7 +120,7 @@ void TrackHeader::paint(juce::Graphics& g)
             }
         }
     }
-    
+
     // Draw background based on selection, mute, and solo state
     if (isInactiveDueToSolo)
     {
@@ -96,7 +129,7 @@ void TrackHeader::paint(juce::Graphics& g)
     }
     else if (selected)
     {
-        // Selected track gets blue background - more opaque for better visibility
+        // Selected track gets blue background
         g.fillAll(ColourPalette::primaryBlue.withAlpha(0.4f));
     }
     else if (isMuted())
@@ -112,9 +145,8 @@ void TrackHeader::paint(juce::Graphics& g)
     if (selected)
     {
         g.setColour(ColourPalette::primaryBlue);
-        g.drawRect(getLocalBounds(), 3);  // Even thicker border for selected (3px)
-        
-        // Add inner highlight for better visibility
+        g.drawRect(getLocalBounds(), 3);
+
         auto innerBounds = getLocalBounds().reduced(3);
         g.setColour(ColourPalette::primaryBlue.withAlpha(0.6f));
         g.drawRect(innerBounds, 1);
@@ -130,47 +162,71 @@ void TrackHeader::paint(juce::Graphics& g)
     g.drawLine(static_cast<float>(getWidth() - 1), 0.0f,
                static_cast<float>(getWidth() - 1), static_cast<float>(getHeight()), 2.0f);
 }
+
 void TrackHeader::resized()
 {
     auto bounds = getLocalBounds().reduced(5);
-    
-    trackNameLabel.setBounds(bounds.removeFromTop(25));
-    bounds.removeFromTop(3);
 
+    // Row 1: Track name at top
+    trackNameLabel.setBounds(bounds.removeFromTop(20));
+    bounds.removeFromTop(2);
+
+    // Row 2: DIV label + combo (shorter) + Mute button
+    auto divRow = bounds.removeFromTop(22);
+    divisionLabel.setBounds(divRow.removeFromLeft(30));
+
+    // Reserve space for Mute button on the right (22px)
+    auto muteArea = divRow.removeFromRight(22);
+    divRow.removeFromRight(3); // spacing between combo and button
+
+    // Division combo takes remaining space (shorter now)
+    divisionCombo.setBounds(divRow.reduced(2, 0));
+
+    // Mute button on the right
+    muteButton.setBounds(muteArea);
+
+    bounds.removeFromTop(2);
+
+    // Row 3: BPM label + slider (shorter) + Solo button
     auto bpmRow = bounds.removeFromTop(22);
     bpmLabel.setBounds(bpmRow.removeFromLeft(30));
-    bpmTextBox.setBounds(bpmRow.removeFromRight(40));
-    bpmSlider.setBounds(bpmRow.reduced(3, 0));
 
-    bounds.removeFromTop(5);
+    // Reserve space for Solo button on the right (22px)
+    auto soloArea = bpmRow.removeFromRight(22);
+    bpmRow.removeFromRight(3); // spacing between slider and button
 
-    auto buttonArea = bounds.removeFromTop(25);
-    int totalButtonWidth = buttonArea.getWidth() - 5;
-    int buttonWidth = totalButtonWidth / 2 - 2;
+    // BPM slider takes remaining space (shorter now)
+    bpmSlider.setBounds(bpmRow.reduced(2, 0));
 
-    auto soloArea = buttonArea.removeFromLeft(buttonWidth);
-    buttonArea.removeFromLeft(5);
-    auto muteArea = buttonArea.removeFromLeft(buttonWidth);
-
+    // Solo button on the right
     soloButton.setBounds(soloArea);
-    muteButton.setBounds(muteArea);
+
+    // Hide reset button (not needed in this compact layout)
+    resetButton.setBounds(0, 0, 0, 0);
 }
 
 void TrackHeader::buttonClicked(juce::Button* button)
 {
     if (button == &soloButton)
     {
-        // Use the value directly instead of storing in unused variable
         bool newSoloState = soloButton.getToggleState();
-        
-        // If soloing this track, unsolo all other tracks
+
         if (newSoloState)
         {
             container.handleSoloChange(trackNumber - 1);
         }
-        
+
         updateVisualState();
-        
+
+        // CRITICAL: Repaint all track headers and tracks for immediate visual feedback
+        for (int i = 0; i < container.getNumTracks(); ++i)
+        {
+            if (auto* header = container.getTrackHeader(i))
+                header->repaint();
+            if (auto* track = container.getTrack(i))
+                track->repaint();
+        }
+
         if (container.isPlaying())
         {
             double currentPosition = container.getPlayheadPosition();
@@ -178,14 +234,23 @@ void TrackHeader::buttonClicked(juce::Button* button)
             container.setPlayheadPosition(currentPosition);
             container.play();
         }
-        
+
         DBG("Track " + juce::String(trackNumber) + " solo " +
-            (newSoloState ? "enabled" : "disabled"));
-       }
+        (newSoloState ? "enabled" : "disabled"));
+    }
     else if (button == &muteButton)
     {
         updateVisualState();
-        
+
+        // CRITICAL: Repaint all track headers and tracks for immediate visual feedback
+        for (int i = 0; i < container.getNumTracks(); ++i)
+        {
+            if (auto* header = container.getTrackHeader(i))
+                header->repaint();
+            if (auto* track = container.getTrack(i))
+                track->repaint();
+        }
+
         if (container.isPlaying())
         {
             double currentPosition = container.getPlayheadPosition();
@@ -193,19 +258,73 @@ void TrackHeader::buttonClicked(juce::Button* button)
             container.setPlayheadPosition(currentPosition);
             container.play();
         }
-        
-        DBG("Track " + juce::String(trackNumber) + " mute " + 
-            (muteButton.getToggleState() ? "enabled" : "disabled"));
+
+        DBG("Track " + juce::String(trackNumber) + " mute " +
+        (muteButton.getToggleState() ? "enabled" : "disabled"));
     }
-   }
-    
-    void TrackHeader::sliderValueChanged(juce::Slider* slider)
+    else if (button == &resetButton)
     {
-        if (slider == &bpmSlider)
-        {
-            updateBPMFromSlider();
-        }
+        handleResetButtonClick();
     }
+}
+
+
+void TrackHeader::handleResetButtonClick()
+{
+    juce::PopupMenu menu;
+    menu.addItem(1, "Reset BPM to 120");
+    menu.addItem(2, "Reset Division to 1/16");
+    menu.addItem(3, "Clear All Clips");
+    menu.addSeparator();
+    menu.addItem(4, "Reset All Settings");
+
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&resetButton),
+                       [this](int result)
+                       {
+                           if (result == 0) return;
+
+                           switch (result)
+                           {
+                               case 1: // Reset BPM
+                                   setTrackBPM(120.0);
+                                   break;
+                               case 2: // Reset Division
+                                   setNoteDivision(NoteDivision::Sixteenth);
+                                   break;
+                               case 3: // Clear clips
+                                   if (auto* track = container.getTrack(trackNumber - 1))
+                                   {
+                                       track->clearAllClips();
+                                   }
+                                   break;
+                               case 4: // Reset all
+                                   setTrackBPM(120.0);
+                                   setNoteDivision(NoteDivision::Sixteenth);
+                                   setMuted(false);
+                                   setSoloed(false);
+                                   break;
+                           }
+                       });
+}
+
+void TrackHeader::sliderValueChanged(juce::Slider* slider)
+{
+    if (slider == &bpmSlider)
+    {
+        updateBPMFromSlider();
+    }
+}
+
+void TrackHeader::comboBoxChanged(juce::ComboBox* comboBox)
+{
+    if (comboBox == &divisionCombo)
+    {
+        int selectedId = divisionCombo.getSelectedId();
+        currentNoteDivision = static_cast<NoteDivision>(selectedId);
+        DBG("Track " + juce::String(trackNumber) + " note division changed to " +
+        divisionCombo.getText());
+    }
+}
 
 void TrackHeader::labelTextChanged(juce::Label* label)
 {
@@ -231,13 +350,12 @@ void TrackHeader::setTrackBPM(double bpm)
 {
     bpm = juce::jlimit(40.0, 400.0, bpm);
     syncBPMControls(bpm);
-    
-    // ✅ CRITICAL FIX: Update MidiProcessor in real-time if playing
+
     if (container.isPlaying())
     {
         processor.midiProcessor.updateTrackBPM(trackNumber, bpm);
-        DBG("Updated track BPM in MidiProcessor: Track " + juce::String(trackNumber) + 
-            " = " + juce::String(bpm, 2) + " BPM");
+        DBG("Updated track BPM in MidiProcessor: Track " + juce::String(trackNumber) +
+        " = " + juce::String(bpm, 2) + " BPM");
     }
 }
 
@@ -246,81 +364,63 @@ void TrackHeader::setTrackName(const juce::String& name)
     trackNameLabel.setText(name, juce::dontSendNotification);
 }
 
+void TrackHeader::setNoteDivision(NoteDivision division)
+{
+    currentNoteDivision = division;
+    divisionCombo.setSelectedId(static_cast<int>(division), juce::dontSendNotification);
+}
+
+void TrackHeader::setBPMEnabled(bool enabled)
+{
+    bpmSlider.setEnabled(enabled);
+    bpmLabel.setEnabled(enabled);
+    bpmSlider.setAlpha(enabled ? 1.0f : 0.4f);
+    bpmLabel.setAlpha(enabled ? 1.0f : 0.4f);
+}
+
+void TrackHeader::setDivisionEnabled(bool enabled)
+{
+    divisionCombo.setEnabled(enabled);
+    divisionLabel.setEnabled(enabled);
+
+    // Visual feedback - gray out when disabled
+    float alpha = enabled ? 1.0f : 0.4f;
+    divisionCombo.setAlpha(alpha);
+    divisionLabel.setAlpha(alpha);
+}
+
 void TrackHeader::showContextMenu()
 {
     juce::PopupMenu menu;
-    
-    menu.addItem(1, "Reset BPM to 120");
-    menu.addItem(2, "Rename Track");
+    menu.addItem(1, "Rename Track");
     menu.addSeparator();
-    menu.addItem(3, "Clear All Clips");
-    
-    menu.showMenuAsync(juce::PopupMenu::Options(),
-        [this](int result) {
-            switch (result)
-            {
-                case 1:
-                    setTrackBPM(120.0);
-                    break;
-                case 2:
-                    trackNameLabel.showEditor();
-                    break;
-                case 3:
-                    // Clear clips on this track
-                    break;
-            }
-        });
-}
+    menu.addItem(2, "Copy Track Settings");
+    menu.addItem(3, "Paste Track Settings");
+    menu.addSeparator();
+    menu.addItem(4, "Clear All Clips", true, false, nullptr);
+    menu.addItem(5, "Remove Track", container.getNumTracks() > 1);
 
-void TrackHeader::updateBPMFromSlider()
-{
-    double bpm = bpmSlider.getValue();
-    bpmTextBox.setText(juce::String(static_cast<int>(bpm)), juce::dontSendNotification);
-    container.onTrackBPMChanged();
-    
-    if (container.isPlaying())
-    {
-        processor.midiProcessor.updateTrackBPM(trackNumber, bpm);
-    }
-}
+    menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(this),
+                       [this](int result)
+                       {
+                           if (result == 0) return;
 
-void TrackHeader::updateBPMFromTextBox()
-{
-    int bpm = bpmTextBox.getText().getIntValue();
-    if (bpm >= 40 && bpm <= 400)
-    {
-        bpmSlider.setValue(static_cast<double>(bpm), juce::dontSendNotification);
-        container.onTrackBPMChanged();
-        
-        if (container.isPlaying())
-        {
-            processor.midiProcessor.updateTrackBPM(trackNumber, static_cast<double>(bpm));
-        }
-    }
-}
-
-void TrackHeader::syncBPMControls(double bpm)
-{
-    bpmSlider.setValue(bpm, juce::dontSendNotification);
-    bpmTextBox.setText(juce::String(static_cast<int>(bpm)), juce::dontSendNotification);
-    container.onTrackBPMChanged();
-}
-
-void TrackHeader::startNameEditing()
-{
-    isEditingName = true;
-}
-
-void TrackHeader::finishNameEditing()
-{
-    isEditingName = false;
-    // Notify container of name change if needed
-}
-
-void TrackHeader::updateVisualState()
-{
-    // Just repaint - the paint() method will use the correct colors
-    repaint();
+                           switch (result)
+                           {
+                               case 1: // Rename
+                                   startNameEditing();
+                                   break;
+                               case 4: // Clear clips
+                                   if (auto* track = container.getTrack(trackNumber - 1))
+                                   {
+                                       track->clearAllClips();
+                                   }
+                                   break;
+                               case 5: // Remove track
+                                   container.removeTrack(trackNumber - 1);
+                                   break;
+                           }
+                       });
 }
 
 void TrackHeader::setSelected(bool shouldBeSelected)
@@ -334,49 +434,59 @@ void TrackHeader::setSelected(bool shouldBeSelected)
 
 void TrackHeader::mouseDown(const juce::MouseEvent& e)
 {
-    DBG("TrackHeader::mouseDown called for track " + juce::String(trackNumber) + 
-        " at position (" + juce::String(e.x) + ", " + juce::String(e.y) + ")");
-    
-    // Only handle left clicks
     if (!e.mods.isLeftButtonDown())
+        return;
+
+    // Let interactive controls handle their own clicks
+    if (bpmSlider.getBounds().contains(e.getPosition()) ||
+        divisionCombo.getBounds().contains(e.getPosition()) ||
+        soloButton.getBounds().contains(e.getPosition()) ||
+        muteButton.getBounds().contains(e.getPosition()) ||
+        resetButton.getBounds().contains(e.getPosition()))
     {
-        DBG("Not a left click, ignoring");
         return;
     }
-    
-    // Check if click is on an interactive control (BPM slider/textbox, solo, mute buttons)
-    // Note: We allow clicking on track name label for selection
-    if (bpmSlider.getBounds().contains(e.getPosition()))
-    {
-        DBG("Click on BPM slider, letting control handle it");
-        return;
-    }
-    if (bpmTextBox.getBounds().contains(e.getPosition()))
-    {
-        DBG("Click on BPM textbox, letting control handle it");
-        return;
-    }
-    if (soloButton.getBounds().contains(e.getPosition()))
-    {
-        DBG("Click on solo button, letting control handle it");
-        return;
-    }
-    if (muteButton.getBounds().contains(e.getPosition()))
-    {
-        DBG("Click on mute button, letting control handle it");
-        return;
-    }
-    
-    // Determine selection mode based on modifiers and current state
+
     bool multiSelect = e.mods.isShiftDown();
-    bool toggleMode = selected && !multiSelect;  // Toggle if clicking on already selected track (without Shift)
-    
-    DBG("Click in selectable area, selecting track " + juce::String(trackNumber) + 
-        ", multiSelect: " + (multiSelect ? "true" : "false") +
-        ", toggleMode: " + (toggleMode ? "true" : "false") +
-        ", currently selected: " + (selected ? "true" : "false"));
-    
-    // Select this track through the container with appropriate mode
-    // This includes clicks on: track name, empty space, BPM label, or any non-interactive area
-    container.selectTrack(trackNumber - 1, multiSelect, toggleMode);  // trackNumber is 1-based, index is 0-based
+    bool toggleMode = selected && !multiSelect;
+
+    container.selectTrack(trackNumber - 1, multiSelect, toggleMode);
+}
+
+void TrackHeader::updateBPMFromSlider()
+{
+    double bpm = bpmSlider.getValue();
+    bpm = juce::jlimit(40.0, 400.0, bpm);
+    syncBPMControls(bpm);
+
+    container.invalidateBarWidthCache();
+    container.onTrackBPMChanged();
+
+    if (container.isPlaying())
+    {
+        processor.midiProcessor.updateTrackBPM(trackNumber, bpm);
+    }
+}
+
+void TrackHeader::syncBPMControls(double bpm)
+{
+    bpm = juce::jlimit(40.0, 400.0, bpm);
+
+    bpmSlider.setValue(bpm, juce::dontSendNotification);
+}
+
+void TrackHeader::startNameEditing()
+{
+    isEditingName = true;
+    trackNameLabel.showEditor();
+}
+
+void TrackHeader::finishNameEditing()
+{
+    isEditingName = false;
+}
+
+void TrackHeader::updateVisualState()
+{
+    repaint();
 }

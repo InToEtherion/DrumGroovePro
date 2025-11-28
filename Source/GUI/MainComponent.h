@@ -11,6 +11,7 @@ class GrooveBrowser;
 class MultiTrackContainer;
 class TimelineControls;
 class FilePathDisplay;
+class SectionBar;
 
 class MainComponent : public juce::Component, public juce::ChangeListener
 {
@@ -24,9 +25,13 @@ public:
     void updateBPMDisplay();
     FolderPanel* getFolderPanel() const { return folderPanel.get(); }
     MultiTrackContainer* getMultiTrackContainer() { return multiTrackContainer.get(); }
+	SectionBar* getSectionBar() const { return sectionBar.get(); }
+	GrooveBrowser* getGrooveBrowser() const { return grooveBrowser.get(); }
     
     // ChangeListener interface
     void changeListenerCallback(juce::ChangeBroadcaster* source) override;
+	
+	HeaderSection* getHeaderSection() const { return headerSection.get(); }
 
     // GUI state persistence - simplified and reliable
     struct GuiState
@@ -66,7 +71,7 @@ private:
     std::unique_ptr<FilePathDisplay> filePathDisplay;
     std::unique_ptr<MultiTrackContainer> multiTrackContainer;
     std::unique_ptr<TimelineControls> timelineControls;
-    
+    std::unique_ptr<SectionBar> sectionBar;
     // Background image
     juce::Image backgroundImage;
 

@@ -147,12 +147,19 @@ TimelineControls::TimelineControls(DrumGrooveProcessor& p, MultiTrackContainer& 
     fitButton.setButtonText("Fit");
     fitButton.addListener(this);
     addAndMakeVisible(fitButton);
+    
+    // NEW: Time/Bar Mode Toggle Button
+    timeBarModeButton.setButtonText("TIME");
+    timeBarModeButton.addListener(this);
+    timeBarModeButton.setTooltip("Toggle between Time mode and Bar mode");
+    addAndMakeVisible(timeBarModeButton);
 
     container.addChangeListener(this);
 
     updateTransportButtons();
     updateLoopButton();
     updateLoopTimeFields();
+    updateTimeBarModeButton(); // NEW: Initialize button state
 
     // Initialize latency field with current parameter value
     updateLatencyOffsetField();
@@ -205,7 +212,13 @@ void TimelineControls::resized()
     timeDisplay.setBounds(bounds.removeFromLeft(110));
 
     // Space after time
-    bounds.removeFromLeft(25);
+    bounds.removeFromLeft(10);
+    
+    // === NEW: TIME/BAR MODE TOGGLE ===
+    timeBarModeButton.setBounds(bounds.removeFromLeft(55));
+    
+    // Space after mode button
+    bounds.removeFromLeft(15);
 
     // === LOOP SELECTION ===
     auto loopFieldArea = bounds.removeFromLeft(280);
@@ -280,6 +293,12 @@ void TimelineControls::buttonClicked(juce::Button* button)
         container.toggleLoop();
         updateLoopButton();
     }
+    else if (button == &timeBarModeButton)
+    {
+        // NEW: Toggle between Time and Bar mode
+        container.toggleTimeBarMode();
+        updateTimeBarModeButton();
+    }
     else if (button == &zoomInButton)
     {
         zoomSlider.setValue(zoomSlider.getValue() * 1.2);
@@ -315,6 +334,7 @@ void TimelineControls::changeListenerCallback(juce::ChangeBroadcaster* source)
     if (source == &container)
     {
         updateLoopTimeFields();
+        updateTimeBarModeButton(); // NEW: Update button state when container changes
     }
 }
 
@@ -325,6 +345,7 @@ void TimelineControls::timerCallback()
     updateLoopTimeFields();
     updateTransportButtons();
     updateZoomDisplay();  // Keep zoom slider in sync with actual zoom level
+    updateTimeBarModeButton(); // NEW: Update mode button state
 }
 
 void TimelineControls::updateTimeDisplay()
@@ -369,6 +390,25 @@ void TimelineControls::updateLoopButton()
     {
         loopButton.setColour(juce::TextButton::buttonColourId, ColourPalette::buttonBackground);
         loopButton.setColour(juce::TextButton::textColourOffId, ColourPalette::primaryText);
+    }
+}
+
+void TimelineControls::updateTimeBarModeButton()
+{
+    // NEW: Update Time/Bar mode button appearance based on current mode
+    bool isBarMode = container.isBarMode();
+    
+    if (isBarMode)
+    {
+        timeBarModeButton.setButtonText("BAR");
+        timeBarModeButton.setColour(juce::TextButton::buttonColourId, ColourPalette::primaryBlue);
+        timeBarModeButton.setColour(juce::TextButton::textColourOffId, ColourPalette::primaryText);
+    }
+    else
+    {
+        timeBarModeButton.setButtonText("TIME");
+        timeBarModeButton.setColour(juce::TextButton::buttonColourId, ColourPalette::buttonBackground);
+        timeBarModeButton.setColour(juce::TextButton::textColourOffId, ColourPalette::primaryText);
     }
 }
 
@@ -449,6 +489,8 @@ void TimelineControls::showFileMenu()
     menu.addSeparator();
     menu.addItem(3, "Export as MIDI");
     menu.addItem(4, "Export Tracks as Separate MIDIs");
+    menu.addSeparator();
+    menu.addItem(5, "Insert Audio Track");
 
     menu.showMenuAsync(juce::PopupMenu::Options().withTargetComponent(&fileButton),
                        [this](int result)
@@ -461,6 +503,8 @@ void TimelineControls::showFileMenu()
                                showExportMenu();
                            else if (result == 4)
                                timelineManager->exportTimelineAsSeparateMidis();
+                           else if (result == 5)
+                               onInsertAudioTrack();
                        });
 }
 
@@ -565,4 +609,18 @@ void TimelineControls::updateLatencyOffsetField()
         int roundedValue = juce::roundToInt(currentValue);
         latencyOffsetField.setText(juce::String(roundedValue), juce::dontSendNotification);
     }
+}
+
+void TimelineControls::onInsertAudioTrack()
+{
+    audioFileChooser = std::make_unique<juce::FileChooser>(
+        "Select Audio File", juce::File(), "*.wav;*.mp3;*.flac;*.ogg;*.aiff");
+
+    auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+
+    audioFileChooser->launchAsync(flags, [this](const juce::FileChooser& fc)
+    {
+        if (fc.getResult().existsAsFile())
+            container.addAudioTrack(fc.getResult());
+    });
 }

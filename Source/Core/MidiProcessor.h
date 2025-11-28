@@ -3,6 +3,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 #include "DrumLibraryManager.h"
 #include <atomic>
+#include <cmath>  // For std::lround
 
 struct MidiClipPlayback
 {

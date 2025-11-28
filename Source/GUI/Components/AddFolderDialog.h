@@ -26,7 +26,7 @@ private:
         void resized() override;
         juce::Label folderPathLabel, sourceLibraryLabel, sourceHelpLabel, libraryNameLabel;
         juce::TextEditor folderPathEditor, libraryNameEditor;
-        juce::TextButton browseButton, addButton, cancelButton;
+        juce::TextButton browseButton, addButton, cancelButton, editOriginButton;
         juce::ComboBox sourceLibraryCombo;
         juce::ProgressBar progressBar;
         juce::Label statusLabel;

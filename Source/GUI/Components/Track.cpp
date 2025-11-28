@@ -5,6 +5,8 @@
 #include "../../Core/MidiDissector.h"
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 #include "../LookAndFeel/ColourPalette.h"
+#include "GrooveBrowser.h"
+
 
 // ===== UNDO/REDO COMMAND CLASSES =====
 class TrackAddClipCommand : public TrackCommand
@@ -184,12 +186,15 @@ Track::~Track()
 
 void Track::paint(juce::Graphics& g)
 {
-    g.fillAll(ColourPalette::secondaryBackground);
+    // Background - transparent to show drum background
+    g.fillAll(ColourPalette::secondaryBackground.withAlpha(0.6f));  // Reduced from 0.8f to see drums better
 
+    // Right separator line (red for debug, should be removed or changed)
     g.setColour(juce::Colours::red.withAlpha(0.5f));
     g.drawLine(static_cast<float>(getWidth() - 1), 0.0f,
                static_cast<float>(getWidth() - 1), static_cast<float>(getHeight()), 2.0f);
 
+    // Draw clips
     drawClips(g);
 
     if (ghostClip)
@@ -200,10 +205,35 @@ void Track::paint(juce::Graphics& g)
 
     drawDropIndicator(g);
 
+    // CRITICAL: Draw gray overlay AFTER clips for mute/solo visual feedback
+    // Check if track should be visually disabled (muted or inactive due to solo)
+    bool isVisuallyDisabled = isMuted();
+    
+    // Check if inactive due to another track being soloed
+    if (!isSoloed())
+    {
+        for (int i = 0; i < container.getNumTracks(); ++i)
+        {
+            if (i != (trackNumber - 1) && container.isTrackSoloed(i))
+            {
+                isVisuallyDisabled = true;
+                break;
+            }
+        }
+    }
+    
+    // Draw gray overlay ON TOP of everything when track is disabled
+    if (isVisuallyDisabled)
+    {
+        g.fillAll(ColourPalette::mainBackground.withAlpha(0.7f));  // Strong dark overlay on top
+    }
+
+    // Bottom separator line
     g.setColour(ColourPalette::separator);
     g.drawLine(0.0f, static_cast<float>(getHeight() - 1),
                static_cast<float>(getWidth()), static_cast<float>(getHeight() - 1));
 }
+
 
 void Track::resized()
 {
@@ -432,7 +462,7 @@ void Track::drawMidiDotsInClip(juce::Graphics& g, const MidiClip& clip, juce::Re
                 if (isFullMidiFile)
                 {
                     // For full MIDI files: color each note based on its drum part type
-                    DrumPartType notePartType = MidiDissector::getPartTypeFromNote(event.getNoteNumber());
+                    DrumPartType notePartType = MidiDissector::getPartTypeFromNote(static_cast<uint8_t>(event.getNoteNumber()));
                     noteColour = MidiDissector::getPartColour(notePartType).brighter(0.3f);
                 }
                 else
@@ -579,6 +609,7 @@ void Track::handleMidiFileDrop(const juce::StringArray& parts, const juce::Point
     newClip.referenceBPM = originalBPM;
     newClip.sourceLibrary = sourceLib;
 
+
     // Store header BPM in a temporary variable for inheritance
     newClip.headerBPM = headerBPM;
 
@@ -707,7 +738,7 @@ void Track::handleDrumPartDrop(const juce::StringArray& parts, const juce::Point
 
     clips.push_back(std::make_unique<MidiClip>(newClip));
 
-    // ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã¢â‚¬Â¦ÃƒÂ¢Ã¢â€šÂ¬Ã…â€œÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€šÃ‚Â¦ CRITICAL FIX: Add clip to MidiProcessor immediately if playing
+    // ÃƒÆ’Ã†â€™Ãƒâ€ Ã¢â‚¬â„¢ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã†â€™ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â‚¬Å¡Ã‚Â¬Ãƒâ€¦Ã¢â‚¬Å“ÃƒÆ’Ã†â€™Ãƒâ€šÃ‚Â¢ÃƒÆ’Ã‚Â¢ÃƒÂ¢Ã¢â€šÂ¬Ã…Â¡Ãƒâ€šÃ‚Â¬ÃƒÆ’Ã¢â‚¬Å¡Ãƒâ€šÃ‚Â¦ CRITICAL FIX: Add clip to MidiProcessor immediately if playing
     if (container.isPlaying())
     {
         double trackBPM = getTrackBPM();
@@ -770,7 +801,21 @@ bool Track::createDrumPartMidiFile(const juce::File& originalFile,
     }
 
     MidiDissector dissector;
-    DrumLibrary targetLib = processor.getTargetLibrary();
+    DrumLibrary targetLib = DrumLibrary::GeneralMIDI; // Default
+	auto* grooveBrowser = processor.getGrooveBrowser();
+	if (grooveBrowser)
+	{
+		targetLib = grooveBrowser->getCurrentTargetLibrary();
+		DBG("Using target library from GrooveBrowser: " + juce::String(static_cast<int>(targetLib)) + 
+			" (" + DrumLibraryManager::getLibraryName(targetLib) + ")");
+	}
+	else
+	{
+		// Fallback if GrooveBrowser not available (shouldn't happen in normal use)
+		targetLib = processor.getTargetLibrary();
+		DBG("WARNING: GrooveBrowser not available, using parameter fallback: " + 
+			juce::String(static_cast<int>(targetLib)));
+	}
 
     auto parts = dissector.dissectMidiFileWithLibraryManager(
         originalFile,
@@ -985,7 +1030,74 @@ float Track::timeToPixels(double time) const
 
 double Track::snapToGrid(double time) const
 {
-    return container.snapToGrid(time);
+    // In TIME mode, use zoom-based time intervals
+    if (!container.isBarMode())
+    {
+        // Get current zoom level from container
+        float zoomLevel = container.getZoomLevel();
+
+        double gridInterval;
+        if (zoomLevel >= 300.0f)
+        {
+            gridInterval = 0.01; // 10ms at 300% zoom or higher
+        }
+        else if (zoomLevel >= 200.0f)
+        {
+            gridInterval = 0.05; // 50ms at 200% zoom
+        }
+        else
+        {
+            gridInterval = 0.1; // 100ms at 100% zoom (default)
+        }
+
+        return std::round(time / gridInterval) * gridInterval;
+    }
+
+    // In BAR mode, use section-aware, DIV-based snapping
+    auto& sectionMgr = processor.sectionManager;
+
+    // Find which section this time falls into
+    const Section* section = sectionMgr.getSectionAtTime(time, container.getMasterBPM());
+    if (!section)
+    {
+        DBG("ERROR: No section found at time " + juce::String(time));
+        return time; // No section, return unsnapped
+    }
+    DBG("Snap: time=" + juce::String(time, 3) +
+    ", section bars=" + juce::String(section->numBars) +
+    ", numerator=" + juce::String(section->numerator));
+
+    // Get track's DIV setting from header
+    auto* header = container.getTrackHeader(trackNumber - 1);
+    if (!header)
+        return time; // No header, return unsnapped
+
+        NoteDivision div = header->getNoteDivision();
+    int divDenominator = static_cast<int>(div); // 4, 8, 16, 32, or 128
+
+    // Calculate snap parameters
+    double sectionBPM = (section->bpm > 0.0) ? section->bpm : container.getMasterBPM();
+    double secondsPerBeat = 60.0 / sectionBPM;
+    double secondsPerBar = secondsPerBeat * section->numerator;
+
+    // Formula: Snap Points per Bar = Beats per Bar × (DIV denominator ÷ Time Signature denominator)
+    double snapPointsPerBar = section->numerator * (static_cast<double>(divDenominator) / section->denominator);
+    double secondsPerSnap = secondsPerBar / snapPointsPerBar;
+	
+    
+    // Find section start time
+    double sectionStartTime = sectionMgr.getSectionStartTime(
+        sectionMgr.getSectionIndex(section)
+    );
+    
+    // Calculate position within section
+    double timeInSection = time - sectionStartTime;
+    
+    // Snap to nearest grid point within section
+    int snapIndex = static_cast<int>(std::round(timeInSection / secondsPerSnap));
+    snapIndex = juce::jmax(0, snapIndex);
+    
+    return sectionStartTime + (snapIndex * secondsPerSnap);
 }
 
 double Track::getVisualScaleFactor() const
@@ -1158,7 +1270,6 @@ void Track::mouseDrag(const juce::MouseEvent& e)
         {
             double trackBPM = getTrackBPM();
             double visualScaleFactor = resizingClip->referenceBPM / trackBPM;
-            double visualDuration = resizingClip->duration * visualScaleFactor;
 
             processor.midiProcessor.updateClipBoundaries(
                 resizingClip->id,
@@ -1187,7 +1298,7 @@ void Track::mouseDrag(const juce::MouseEvent& e)
                         double newTime = originalTime + deltaTime;
 
                         if (!e.mods.isAltDown())
-                            newTime = container.snapToGrid(newTime);
+                            newTime = snapToGrid(newTime);
 
                         newTime = juce::jmax(0.0, newTime);
                         clip->startTime = newTime;
@@ -1313,7 +1424,6 @@ void Track::mouseUp(const juce::MouseEvent& e)
                 // Update MidiProcessor if playing
                 if (container.isPlaying())
                 {
-                    double trackBPM = getTrackBPM();
                     processor.midiProcessor.updateClipBoundaries(
                         clip->id,
                         clip->startTime,
@@ -1489,9 +1599,6 @@ void Track::itemDragMove(const SourceDetails& details)
             dropIndicatorX = container.timeToPixels(snappedMouseTime);
             ghostClip->startTime = snappedMouseTime;
 
-            DBG("Drag move - Mouse time: " + juce::String(mouseTime, 3) +
-            ", Snapped: " + juce::String(snappedMouseTime, 3) +
-            ", Ghost & Drop indicator at: " + juce::String(snappedMouseTime, 3));
         }
         else
         {
@@ -1555,6 +1662,22 @@ void Track::drawClips(juce::Graphics& g)
     double trackBPM = getTrackBPM();
     float zoom = container.getZoom();
 
+    // Check if track should be visually disabled (muted or inactive due to solo)
+    bool isVisuallyDisabled = isMuted();
+    
+    // Check if inactive due to another track being soloed
+    if (!isSoloed())
+    {
+        for (int i = 0; i < container.getNumTracks(); ++i)
+        {
+            if (i != (trackNumber - 1) && container.isTrackSoloed(i))
+            {
+                isVisuallyDisabled = true;
+                break;
+            }
+        }
+    }
+
     for (const auto& clip : clips)
     {
         // CRITICAL FIX: Track is INSIDE TimelineContent (the scrollable content)
@@ -1580,9 +1703,10 @@ void Track::drawClips(juce::Graphics& g)
         auto clipBounds = juce::Rectangle<float>(clipX, 10.0f, width, static_cast<float>(TRACK_HEIGHT - 20));
 
         // Draw clip background with appropriate color
+        // Darken if track is visually disabled (muted or inactive due to solo)
         juce::Colour clipColour = clip->colour;
-        if (isMuted())
-            clipColour = clipColour.darker(0.5f);
+        if (isVisuallyDisabled)
+            clipColour = clipColour.darker(0.6f);
 
         g.setColour(clipColour);
         g.fillRoundedRectangle(clipBounds, 4.0f);
@@ -1610,7 +1734,10 @@ void Track::drawClips(juce::Graphics& g)
         {
             auto& lnf = DrumGrooveLookAndFeel::getInstance();
             g.setFont(lnf.getSmallFont().withHeight(11.0f));
-            g.setColour(juce::Colours::white.withAlpha(0.9f));
+            
+            // Dim text if track is disabled
+            float textAlpha = isVisuallyDisabled ? 0.5f : 0.9f;
+            g.setColour(juce::Colours::white.withAlpha(textAlpha));
             g.drawText(clip->name, clipBounds.reduced(4.0f, 2.0f),
                        juce::Justification::topLeft, true);
         }
@@ -1999,6 +2126,10 @@ void Track::addClip(const MidiClip& clip, bool recordUndo)
         container.updateTimelineSize();
         repaint();
     }
+	if (auto* mtc = findParentComponentOfClass<MultiTrackContainer>())
+    {
+        mtc->invalidateBarWidthCache();
+    }
 }
 
 void Track::removeSelectedClips()
@@ -2013,6 +2144,10 @@ void Track::removeSelectedClips()
     if (!toDelete.empty())
     {
         addUndoCommand(std::make_unique<TrackDeleteClipsCommand>(this, toDelete));
+    }
+	if (auto* mtc = findParentComponentOfClass<MultiTrackContainer>())
+    {
+        mtc->invalidateBarWidthCache();
     }
 }
 
@@ -2033,6 +2168,10 @@ void Track::clearAllClips(bool showConfirmation)
         // Clear all clips using the delete command - fully undoable with Ctrl+Z
         addUndoCommand(std::make_unique<TrackDeleteClipsCommand>(this, allClips));
         DBG("Cleared " + juce::String(allClips.size()) + " clips from track (undoable)");
+    }
+	if (auto* mtc = findParentComponentOfClass<MultiTrackContainer>())
+    {
+        mtc->invalidateBarWidthCache();
     }
 }
 

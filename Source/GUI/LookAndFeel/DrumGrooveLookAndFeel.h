@@ -38,6 +38,9 @@ public:
                                                                                                                                                                                        const juce::String& text,
                                                                                                                                                                                        const juce::Justification& position,
                                                                                                                                                                                        juce::GroupComponent& group) override;
+																																													   juce::Font getBoldFont() const {
+																																															return juce::Font(juce::FontOptions("Segoe UI", 13.0f, juce::Font::bold));
+																																														}
 
                                                                                                                                                                                        // Font utilities - CORRECTED for JUCE 8
                                                                                                                                                                                        juce::Font getTitleFont() const {

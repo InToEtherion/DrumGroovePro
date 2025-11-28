@@ -50,6 +50,9 @@ public juce::Button::Listener,
 
                 juce::TextButton zoomInButton, zoomOutButton, fitButton;
                 juce::Slider zoomSlider;
+                
+                // NEW: Time/Bar Mode Toggle
+                juce::TextButton timeBarModeButton;
 
                 static constexpr int FILE_BUTTONS_WIDTH = 180;
                 static constexpr int SEPARATOR_WIDTH = 2;
@@ -66,11 +69,16 @@ public juce::Button::Listener,
                 void handleLoopEndChange();
                 void handleLatencyOffsetChange();
                 void updateLatencyOffsetField();
+                
+                // NEW: Time/Bar mode control
+                void updateTimeBarModeButton();
 
                 void showFileMenu();
                 void showExportMenu();
                 void onAddFile();
                 void onRemoveFile();
+                void onInsertAudioTrack();
+                std::unique_ptr<juce::FileChooser> audioFileChooser;
 
                 static juce::String formatTime(double seconds);
                 static double parseTime(const juce::String& timeStr);

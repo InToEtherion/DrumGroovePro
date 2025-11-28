@@ -1,18 +1,18 @@
 cmake_minimum_required(VERSION 3.22)
-project(DrumGroovePro VERSION 0.9.7)
+project(DrumGroovePro VERSION 0.9.9)
 
 # C++20 standard
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# Add JUCE - using relative path as requested (no hardcoded paths)
+# Add JUCE - using relative path
 add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../JUCE juce_build)
 
 # Platform-specific plugin formats
 if(APPLE)
     set(PLUGIN_FORMATS VST3 AU)
 else()
-    set(PLUGIN_FORMATS VST3)
+    set(PLUGIN_FORMATS VST3 Standalone)
 endif()
 
 # Add the plugin target
@@ -38,11 +38,14 @@ juce_add_plugin(DrumGroovePro
 # Generate JUCE header
 juce_generate_juce_header(DrumGroovePro)
 
-# Add source files - Complete list with proper structure
+# Add source files - Complete list with proper structure INCLUDING NEW SECTION FILES
 target_sources(DrumGroovePro PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
     Source/GUI/MainComponent.cpp
+    Source/GUI/SampleDownloadDialog.cpp
+    Source/GUI/SamplesManagerWindow.cpp
+    Source/GUI/EQPresetManager.cpp
     Source/GUI/Components/HeaderSection.cpp
     Source/GUI/Components/GrooveBrowser.cpp
     Source/GUI/Components/DrumPartsColumn.cpp
@@ -56,13 +59,31 @@ target_sources(DrumGroovePro PRIVATE
     Source/GUI/Components/CustomFileBrowser.cpp
     Source/GUI/Components/FilePathDisplay.cpp
     Source/GUI/Components/TimelineManager.cpp
+    Source/GUI/Components/SectionBar.cpp
+    Source/GUI/Components/DrumLibraryMappingEditor.cpp
+    Source/GUI/Components/OriginLibraryEditor.cpp
+    Source/GUI/Components/AudioTrack.cpp
+    Source/GUI/Components/AudioTrackHeader.cpp
     Source/GUI/LookAndFeel/DrumGrooveLookAndFeel.cpp
     Source/Core/MidiProcessor.cpp
     Source/Core/MidiDissector.cpp
     Source/Core/DrumLibraryManager.cpp
     Source/Core/FavoritesManager.cpp
+    Source/Core/SectionManager.cpp
     Source/Utils/OpenGLUtils.cpp
+    Source/Utils/SampleDownloader.cpp
+    Source/Utils/DrumMixer.cpp
+    Source/Utils/DrumMixerChannel.cpp
+    Source/Utils/ReverbProcessor.cpp
+    Source/Utils/SampleEngine.cpp
+    Source/Utils/SampleVoice.cpp
+    Source/Utils/SFZParser.cpp
+    Source/Utils/DrumGizmoParser.cpp
+    Source/Utils/SimpleEQ.cpp
+    Source/Utils/DrumCompressor.cpp
+
 )
+
 
 # Include directories
 target_include_directories(DrumGroovePro PRIVATE
@@ -86,6 +107,7 @@ target_compile_definitions(DrumGroovePro PUBLIC
     JUCE_MODAL_LOOPS_PERMITTED=1
     JUCE_ENABLE_REPAINT_DEBUGGING=0
     JUCE_ENABLE_LIVE_CONSTANT_EDITOR=0
+    JUCE_USE_MP3AUDIOFORMAT=1
 )
 
 # Debug/Release specific definitions
@@ -175,70 +197,83 @@ elseif(APPLE)
         JUCE_PLUGINHOST_AU=1
     )
 
-    # macOS compiler flags for Clang
+    # macOS-specific compiler flags
     target_compile_options(DrumGroovePro PRIVATE
         -Wall
         -Wextra
         -Wno-unused-parameter
         -Wno-missing-field-initializers
-        -Wno-deprecated-declarations
     )
 
-    # Release optimizations
     if(CMAKE_BUILD_TYPE STREQUAL "Release")
         target_compile_options(DrumGroovePro PRIVATE
             -O3
             -ffast-math
-            -fvectorize
-            -fslp-vectorize
+            -fno-finite-math-only
         )
     endif()
 
-    # Code signing (set to automatic - user can configure later)
-    set_target_properties(DrumGroovePro PROPERTIES
-        XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY "-"
-        XCODE_ATTRIBUTE_DEVELOPMENT_TEAM ""
-        XCODE_ATTRIBUTE_CODE_SIGN_STYLE "Automatic"
-    )
-
 #==============================================================================
-# LINUX-SPECIFIC SETTINGS (PipeWire + XWayland)
+# LINUX-SPECIFIC SETTINGS
 #==============================================================================
 elseif(UNIX AND NOT APPLE)
+    # PipeWire support (modern audio on Linux)
+    find_package(PkgConfig)
+    if(PKG_CONFIG_FOUND)
+        pkg_check_modules(PIPEWIRE libpipewire-0.3)
+        if(PIPEWIRE_FOUND)
+            target_include_directories(DrumGroovePro PRIVATE ${PIPEWIRE_INCLUDE_DIRS})
+            target_link_libraries(DrumGroovePro PRIVATE ${PIPEWIRE_LIBRARIES})
+            target_compile_definitions(DrumGroovePro PRIVATE JUCE_USE_PIPEWIRE=1)
+        endif()
+    endif()
+
+    # JACK Audio support
+    pkg_check_modules(JACK jack)
+    if(JACK_FOUND)
+        target_include_directories(DrumGroovePro PRIVATE ${JACK_INCLUDE_DIRS})
+        target_link_libraries(DrumGroovePro PRIVATE ${JACK_LIBRARIES})
+        target_compile_definitions(DrumGroovePro PRIVATE JUCE_JACK=1)
+    endif()
+
+    # ALSA support (fallback)
+    pkg_check_modules(ALSA alsa)
+    if(ALSA_FOUND)
+        target_include_directories(DrumGroovePro PRIVATE ${ALSA_INCLUDE_DIRS})
+        target_link_libraries(DrumGroovePro PRIVATE ${ALSA_LIBRARIES})
+        target_compile_definitions(DrumGroovePro PRIVATE JUCE_ALSA=1)
+    endif()
+
+    # X11/Wayland support
+    find_package(X11 REQUIRED)
+    target_link_libraries(DrumGroovePro PRIVATE ${X11_LIBRARIES})
+
     target_compile_definitions(DrumGroovePro PUBLIC
-        JUCE_JACK=1              # JACK audio support
-        JUCE_ALSA=1              # ALSA support (fallback)
-        JUCE_USE_X11=1           # X11 for XWayland compatibility
         LINUX=1
-        # CRITICAL: Text rendering workarounds for JUCE 8.0.4 Linux
-        JUCE_USE_FREETYPE=1
-        JUCE_USE_FREETYPE_AMALGAMATED=0
-        # CRITICAL: Enable OpenGL on Linux for smooth timeline playhead animation
-        JUCE_OPENGL=1
+        JUCE_USE_XSHM=1
+        JUCE_USE_XRENDER=1
+        JUCE_USE_XCURSOR=1
     )
 
-    # Linux compiler flags for GCC/Clang
+    # Linux compiler flags
     target_compile_options(DrumGroovePro PRIVATE
         -Wall
         -Wextra
         -Wno-unused-parameter
         -Wno-missing-field-initializers
-        -fPIC                    # Position independent code (required for shared libs)
     )
 
-    # Release optimizations
     if(CMAKE_BUILD_TYPE STREQUAL "Release")
         target_compile_options(DrumGroovePro PRIVATE
             -O3
             -ffast-math
-            -march=native
-            -mtune=native
+            -fno-finite-math-only
         )
     endif()
 endif()
 
 #==============================================================================
-# JUCE MODULE LINKING - Common to all platforms
+# LINK JUCE MODULES - Common to all platforms
 #==============================================================================
 target_link_libraries(DrumGroovePro PRIVATE
     juce::juce_audio_basics
@@ -248,113 +283,16 @@ target_link_libraries(DrumGroovePro PRIVATE
     juce::juce_audio_utils
     juce::juce_core
     juce::juce_data_structures
+    juce::juce_dsp
     juce::juce_events
     juce::juce_graphics
     juce::juce_gui_basics
     juce::juce_gui_extra
     juce::juce_opengl
-    PUBLIC
-    juce::juce_recommended_config_flags
-    juce::juce_recommended_warning_flags
 )
 
 #==============================================================================
-# PLATFORM-SPECIFIC LIBRARIES
-#==============================================================================
-
-if(WIN32)
-    # Windows OpenGL and DirectX libraries
-    target_link_libraries(DrumGroovePro PRIVATE
-        opengl32
-        glu32
-        d3d11      # DirectX for hardware acceleration
-        dxgi       # DirectX Graphics Infrastructure
-    )
-
-elseif(APPLE)
-    # macOS frameworks required by JUCE
-    target_link_libraries(DrumGroovePro PRIVATE
-        "-framework Accelerate"
-        "-framework AudioToolbox"
-        "-framework AudioUnit"
-        "-framework Carbon"
-        "-framework Cocoa"
-        "-framework CoreAudio"
-        "-framework CoreAudioKit"
-        "-framework CoreMIDI"
-        "-framework IOKit"
-        "-framework QuartzCore"
-        "-framework WebKit"
-        "-framework Metal"
-        "-framework MetalKit"
-        "-framework OpenGL"
-    )
-
-elseif(UNIX AND NOT APPLE)
-    # Find required Linux packages
-    find_package(PkgConfig REQUIRED)
-
-    # ALSA (Linux audio - required)
-    pkg_check_modules(ALSA REQUIRED alsa)
-    target_include_directories(DrumGroovePro PRIVATE ${ALSA_INCLUDE_DIRS})
-    target_link_libraries(DrumGroovePro PRIVATE ${ALSA_LIBRARIES})
-
-    # JACK audio (recommended)
-    pkg_check_modules(JACK jack)
-    if(JACK_FOUND)
-        target_include_directories(DrumGroovePro PRIVATE ${JACK_INCLUDE_DIRS})
-        target_link_libraries(DrumGroovePro PRIVATE ${JACK_LIBRARIES})
-        message(STATUS "JACK audio support: Enabled")
-    else()
-        message(STATUS "JACK audio support: Not found (optional)")
-    endif()
-
-    # PipeWire support (modern Linux audio - optional but recommended)
-    pkg_check_modules(PIPEWIRE libpipewire-0.3)
-    if(PIPEWIRE_FOUND)
-        target_include_directories(DrumGroovePro PRIVATE ${PIPEWIRE_INCLUDE_DIRS})
-        target_link_libraries(DrumGroovePro PRIVATE ${PIPEWIRE_LIBRARIES})
-        target_compile_definitions(DrumGroovePro PRIVATE JUCE_PIPEWIRE=1)
-        message(STATUS "PipeWire audio support: Enabled")
-    else()
-        message(STATUS "PipeWire audio support: Not found (optional, ALSA will be used)")
-    endif()
-
-    # X11 libraries (required for XWayland compatibility)
-    find_package(X11 REQUIRED)
-    target_link_libraries(DrumGroovePro PRIVATE
-        ${X11_LIBRARIES}
-        ${X11_Xext_LIB}
-        ${X11_Xinerama_LIB}
-        ${X11_Xrandr_LIB}
-        ${X11_Xcursor_LIB}
-    )
-
-    # FreeType for font rendering
-    pkg_check_modules(FREETYPE REQUIRED freetype2)
-    target_include_directories(DrumGroovePro PRIVATE ${FREETYPE_INCLUDE_DIRS})
-    target_link_libraries(DrumGroovePro PRIVATE ${FREETYPE_LIBRARIES})
-
-    # Additional Linux libraries
-    target_link_libraries(DrumGroovePro PRIVATE
-        pthread           # Threading
-        dl               # Dynamic loading
-        rt               # Real-time extensions
-        GL               # OpenGL
-    )
-endif()
-
-#==============================================================================
-# OUTPUT DIRECTORIES
-#==============================================================================
-set_target_properties(DrumGroovePro PROPERTIES
-    RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
-    LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-    ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib"
-)
-
-#==============================================================================
-# RESOURCE PATHS - Platform-specific
+# RESOURCE PATH SETUP
 #==============================================================================
 if(WIN32)
     set(BUILD_VST3_RESOURCES "${CMAKE_BINARY_DIR}/lib/VST3/DrumGroovePro.vst3/Contents/Resources")
@@ -378,6 +316,7 @@ add_custom_command(TARGET DrumGroovePro_VST3 POST_BUILD
     # Create directory structure in build folder
     COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_VST3_RESOURCES}/icons/folder/16x16"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_VST3_RESOURCES}/icons/midi/16x16"
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_VST3_RESOURCES}/icons/misc/16x16"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_VST3_RESOURCES}/logo"
     COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_VST3_RESOURCES}/background"
 
@@ -390,15 +329,28 @@ add_custom_command(TARGET DrumGroovePro_VST3 POST_BUILD
         "${CMAKE_SOURCE_DIR}/Resources/icons/midi/16x16/midi.png"
         "${BUILD_VST3_RESOURCES}/icons/midi/16x16/midi.png"
 
+    # Copy misc icons for mapping editors
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/Resources/icons/misc/16x16/arrow.png"
+        "${BUILD_VST3_RESOURCES}/icons/misc/16x16/arrow.png"
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/Resources/icons/misc/16x16/cross.png"
+        "${BUILD_VST3_RESOURCES}/icons/misc/16x16/cross.png"
+
     # Copy logo to build folder
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Resources/logo/logo.png"
         "${BUILD_VST3_RESOURCES}/logo/logo.png"
 
-    # Copy background to build folder
+    # Copy background images to build folder
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Resources/background/background.png"
         "${BUILD_VST3_RESOURCES}/background/background.png"
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/Resources/background/sample.png"
+        "${BUILD_VST3_RESOURCES}/background/sample.png"
 
     COMMAND ${CMAKE_COMMAND} -E echo "=== Resources copied to build directory ==="
     COMMAND ${CMAKE_COMMAND} -E echo "Build VST3 path: ${BUILD_VST3_RESOURCES}"
@@ -416,6 +368,7 @@ add_custom_command(TARGET DrumGroovePro_VST3 POST_BUILD
     # Create directories in system folder
     COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_VST3_RESOURCES}/icons/folder/16x16" || ${CMAKE_COMMAND} -E true
     COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_VST3_RESOURCES}/icons/midi/16x16" || ${CMAKE_COMMAND} -E true
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_VST3_RESOURCES}/icons/misc/16x16" || ${CMAKE_COMMAND} -E true
     COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_VST3_RESOURCES}/logo" || ${CMAKE_COMMAND} -E true
     COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_VST3_RESOURCES}/background" || ${CMAKE_COMMAND} -E true
 
@@ -428,6 +381,15 @@ add_custom_command(TARGET DrumGroovePro_VST3 POST_BUILD
         "${CMAKE_SOURCE_DIR}/Resources/icons/midi/16x16/midi.png"
         "${SYSTEM_VST3_RESOURCES}/icons/midi/16x16/midi.png" || ${CMAKE_COMMAND} -E true
 
+    # Copy misc icons for mapping editors
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/Resources/icons/misc/16x16/arrow.png"
+        "${SYSTEM_VST3_RESOURCES}/icons/misc/16x16/arrow.png" || ${CMAKE_COMMAND} -E true
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/Resources/icons/misc/16x16/cross.png"
+        "${SYSTEM_VST3_RESOURCES}/icons/misc/16x16/cross.png" || ${CMAKE_COMMAND} -E true
+
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Resources/logo/logo.png"
         "${SYSTEM_VST3_RESOURCES}/logo/logo.png" || ${CMAKE_COMMAND} -E true
@@ -435,6 +397,10 @@ add_custom_command(TARGET DrumGroovePro_VST3 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
         "${CMAKE_SOURCE_DIR}/Resources/background/background.png"
         "${SYSTEM_VST3_RESOURCES}/background/background.png" || ${CMAKE_COMMAND} -E true
+
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        "${CMAKE_SOURCE_DIR}/Resources/background/sample.png"
+        "${SYSTEM_VST3_RESOURCES}/background/sample.png" || ${CMAKE_COMMAND} -E true
 
     COMMAND ${CMAKE_COMMAND} -E echo "=== Resources copied to system folder ==="
     COMMAND ${CMAKE_COMMAND} -E echo "System VST3 path: ${SYSTEM_VST3_RESOURCES}"
@@ -453,6 +419,7 @@ if(APPLE)
         # Create directory structure in AU build folder
         COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_AU_RESOURCES}/icons/folder/16x16"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_AU_RESOURCES}/icons/midi/16x16"
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_AU_RESOURCES}/icons/misc/16x16"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_AU_RESOURCES}/logo"
         COMMAND ${CMAKE_COMMAND} -E make_directory "${BUILD_AU_RESOURCES}/background"
 
@@ -465,6 +432,15 @@ if(APPLE)
             "${CMAKE_SOURCE_DIR}/Resources/icons/midi/16x16/midi.png"
             "${BUILD_AU_RESOURCES}/icons/midi/16x16/midi.png"
 
+        # Copy misc icons for mapping editors
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/Resources/icons/misc/16x16/arrow.png"
+            "${BUILD_AU_RESOURCES}/icons/misc/16x16/arrow.png"
+
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/Resources/icons/misc/16x16/cross.png"
+            "${BUILD_AU_RESOURCES}/icons/misc/16x16/cross.png"
+
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/Resources/logo/logo.png"
             "${BUILD_AU_RESOURCES}/logo/logo.png"
@@ -473,9 +449,14 @@ if(APPLE)
             "${CMAKE_SOURCE_DIR}/Resources/background/background.png"
             "${BUILD_AU_RESOURCES}/background/background.png"
 
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/Resources/background/sample.png"
+            "${BUILD_AU_RESOURCES}/background/sample.png"
+
         # Copy to system AU folder
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_AU_RESOURCES}/icons/folder/16x16" || ${CMAKE_COMMAND} -E true
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_AU_RESOURCES}/icons/midi/16x16" || ${CMAKE_COMMAND} -E true
+        COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_AU_RESOURCES}/icons/misc/16x16" || ${CMAKE_COMMAND} -E true
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_AU_RESOURCES}/logo" || ${CMAKE_COMMAND} -E true
         COMMAND ${CMAKE_COMMAND} -E make_directory "${SYSTEM_AU_RESOURCES}/background" || ${CMAKE_COMMAND} -E true
 
@@ -487,6 +468,15 @@ if(APPLE)
             "${CMAKE_SOURCE_DIR}/Resources/icons/midi/16x16/midi.png"
             "${SYSTEM_AU_RESOURCES}/icons/midi/16x16/midi.png" || ${CMAKE_COMMAND} -E true
 
+        # Copy misc icons for mapping editors
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/Resources/icons/misc/16x16/arrow.png"
+            "${SYSTEM_AU_RESOURCES}/icons/misc/16x16/arrow.png" || ${CMAKE_COMMAND} -E true
+
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/Resources/icons/misc/16x16/cross.png"
+            "${SYSTEM_AU_RESOURCES}/icons/misc/16x16/cross.png" || ${CMAKE_COMMAND} -E true
+
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/Resources/logo/logo.png"
             "${SYSTEM_AU_RESOURCES}/logo/logo.png" || ${CMAKE_COMMAND} -E true
@@ -494,6 +484,10 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "${CMAKE_SOURCE_DIR}/Resources/background/background.png"
             "${SYSTEM_AU_RESOURCES}/background/background.png" || ${CMAKE_COMMAND} -E true
+
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${CMAKE_SOURCE_DIR}/Resources/background/sample.png"
+            "${SYSTEM_AU_RESOURCES}/background/sample.png" || ${CMAKE_COMMAND} -E true
 
         COMMAND ${CMAKE_COMMAND} -E echo "=== Resources copied to AU folders ==="
 
@@ -533,5 +527,7 @@ if(UNIX AND NOT APPLE)
 endif()
 
 message(STATUS "  Resource Source: ${CMAKE_SOURCE_DIR}/Resources")
+message(STATUS "  Version: ${PROJECT_VERSION}")
+message(STATUS "  NEW: 7-Channel Mixer with Background (v0.9.9)")
 message(STATUS "======================================================")
 message(STATUS "")

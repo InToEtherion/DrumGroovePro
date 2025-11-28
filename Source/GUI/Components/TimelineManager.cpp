@@ -40,14 +40,14 @@ void TimelineManager::saveTimelineState()
     auto targetFolder = chooseSaveLocation();
     if (targetFolder == juce::File{}) return;
 
-    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CRITICAL FIX: Check if folder is not empty and confirm deletion
+    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ CRITICAL FIX: Check if folder is not empty and confirm deletion
     if (!confirmOverwriteFolder(targetFolder))
     {
         DBG("User cancelled save due to non-empty folder");
         return;
     }
 
-    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CRITICAL FIX: Clear folder contents if not empty
+    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ CRITICAL FIX: Clear folder contents if not empty
     if (!isFolderEmpty(targetFolder))
     {
         if (!clearFolderContents(targetFolder))
@@ -251,7 +251,7 @@ void TimelineManager::exportTimelineAsSeparateMidis()
         "Select 'No' to preserve the exact timeline positions.",
         "Yes, trim", "No, keep silence");
 
-    // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CRITICAL FIX: Log which clips are being exported for debugging
+    // ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ CRITICAL FIX: Log which clips are being exported for debugging
     DBG("=== Starting MIDI Export ===");
     for (int i = 0; i < container->getNumTracks(); ++i)
     {
@@ -429,6 +429,42 @@ void TimelineManager::copyTempMidiFiles(const juce::File& targetFolder, juce::Va
     }
     
     DBG("Copied " + juce::String(fileCounter - 1) + " temporary MIDI files");
+    
+    // Also copy audio track files
+    auto audioTracksTree = state.getChildWithName("AudioTracks");
+    if (audioTracksTree.isValid())
+    {
+        // Create audio_files subfolder
+        juce::File audioFolder = targetFolder.getParentDirectory().getChildFile("audio_files");
+        audioFolder.createDirectory();
+        
+        int audioCounter = 1;
+        for (auto audioTrackNode : audioTracksTree)
+        {
+            juce::String filePath = audioTrackNode.getProperty("file", "").toString();
+            if (filePath.isEmpty()) continue;
+            
+            juce::File audioFile(filePath);
+            if (audioFile.existsAsFile())
+            {
+                // Generate new filename preserving extension
+                juce::String extension = audioFile.getFileExtension();
+                juce::String newFileName = "audio_" + juce::String(audioCounter).paddedLeft('0', 4) + extension;
+                audioCounter++;
+                
+                juce::File targetFile = audioFolder.getChildFile(newFileName);
+                
+                if (audioFile.copyFileTo(targetFile))
+                {
+                    // Update path to relative
+                    juce::String relativePath = "audio_files/" + newFileName;
+                    audioTrackNode.setProperty("file", relativePath, nullptr);
+                    DBG("Copied audio file: " + audioFile.getFileName() + " -> " + newFileName);
+                }
+            }
+        }
+        DBG("Copied " + juce::String(audioCounter - 1) + " audio files");
+    }
 }
 
 //==============================================================================
@@ -478,6 +514,33 @@ void TimelineManager::restoreTimelineMetadata(const juce::ValueTree& state, cons
                 }
             }
             // Absolute paths are left as-is (regular MIDI files from browser)
+        }
+    }
+    
+    // Process audio tracks and update file paths
+    auto audioTracksTree = state.getChildWithName("AudioTracks");
+    if (audioTracksTree.isValid())
+    {
+        for (auto audioTrackNode : audioTracksTree)
+        {
+            juce::String filePath = audioTrackNode.getProperty("file", "").toString();
+            if (filePath.isEmpty()) continue;
+            
+            // Check if this is a relative path
+            if (!filePath.contains(":") && !filePath.startsWith("/"))
+            {
+                juce::File absoluteFile = folder.getChildFile(filePath);
+                
+                if (absoluteFile.existsAsFile())
+                {
+                    audioTrackNode.setProperty("file", absoluteFile.getFullPathName(), nullptr);
+                    DBG("Resolved audio relative path: " + filePath + " -> " + absoluteFile.getFullPathName());
+                }
+                else
+                {
+                    DBG("WARNING: Cannot find saved audio file: " + absoluteFile.getFullPathName());
+                }
+            }
         }
     }
 }
@@ -1115,6 +1178,7 @@ juce::var TimelineManager::createDragDataForSelectedClips() const
         obj->setProperty("duration", clip->duration);
         obj->setProperty("originalBPM", clip->originalBPM);
         obj->setProperty("id", clip->id);
+        obj->setProperty("sourceLibrary", static_cast<int>(clip->sourceLibrary));  // NEW: Add source library
         
         // Find which track this clip belongs to
         for (int trackIdx = 0; trackIdx < totalTracks; ++trackIdx)
@@ -1136,6 +1200,7 @@ juce::var TimelineManager::createDragDataForSelectedClips() const
     
     return dragData;
 }
+
 
 //==============================================================================
 void TimelineManager::performExternalDrag(const juce::MouseEvent& e, const juce::var& dragData)
@@ -1172,6 +1237,10 @@ void TimelineManager::performExternalDrag(const juce::MouseEvent& e, const juce:
     
     DBG("Found DragAndDropContainer");
     
+    // Get target library for remapping
+    DrumLibrary targetLib = getTargetLibrary();
+    DBG("Target library for drag: " + juce::String(static_cast<int>(targetLib)));
+    
     // Create a temporary combined MIDI file for all selected clips
     juce::String tempFileName = "DrumGroovePro_timeline_drag_" + 
         juce::String(juce::Random::getSystemRandom().nextInt64()) + ".mid";
@@ -1207,6 +1276,20 @@ void TimelineManager::performExternalDrag(const juce::MouseEvent& e, const juce:
             double startTime = obj->getProperty("startTime");
             double relativeStartTime = startTime - earliestStartTime;
             
+            // NEW: Get source library for this clip
+            DrumLibrary sourceLib = static_cast<DrumLibrary>(static_cast<int>(obj->getProperty("sourceLibrary")));
+            
+            // Determine if note remapping is needed for this clip
+            bool needsRemapping = (targetLib != DrumLibrary::Bypass && 
+                                   sourceLib != DrumLibrary::Unknown && 
+                                   sourceLib != targetLib);
+            
+            if (needsRemapping)
+            {
+                DBG("Clip remapping needed: Source " + juce::String(static_cast<int>(sourceLib)) + 
+                    " -> Target " + juce::String(static_cast<int>(targetLib)));
+            }
+            
             juce::File clipFile(filePath);
             if (clipFile.existsAsFile())
             {
@@ -1235,6 +1318,23 @@ void TimelineManager::performExternalDrag(const juce::MouseEvent& e, const juce:
                                 {
                                     juce::MidiMessage msg = event->message;
                                     msg.setTimeStamp(event->message.getTimeStamp() + timeOffset);
+                                    
+                                    // NEW: Apply note remapping if needed
+                                    if (needsRemapping && msg.isNoteOnOrOff())
+                                    {
+                                        uint8_t originalNote = static_cast<uint8_t>(msg.getNoteNumber());
+                                        uint8_t remappedNote = processor.drumLibraryManager.mapNoteToLibrary(
+                                            originalNote, 
+                                            sourceLib, 
+                                            targetLib);
+                                        
+                                        if (remappedNote != originalNote)
+                                        {
+                                            msg.setNoteNumber(remappedNote);
+                                            DBG("Remapped note: " + juce::String(originalNote) + " -> " + juce::String(remappedNote));
+                                        }
+                                    }
+                                    
                                     trackSequences.getReference(trackNum).addEvent(msg);
                                 }
                             }
@@ -1327,7 +1427,7 @@ void TimelineManager::performExternalDrag(const juce::MouseEvent& e, const juce:
 }
 
 //==============================================================================
-// ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ NEW: Check if folder is empty
+// ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NEW: Check if folder is empty
 bool TimelineManager::isFolderEmpty(const juce::File& folder) const
 {
     if (!folder.exists() || !folder.isDirectory())
@@ -1341,7 +1441,7 @@ bool TimelineManager::isFolderEmpty(const juce::File& folder) const
 }
 
 //==============================================================================
-// ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ NEW: Clear all contents of a folder
+// ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NEW: Clear all contents of a folder
 bool TimelineManager::clearFolderContents(const juce::File& folder) const
 {
     if (!folder.exists() || !folder.isDirectory())
@@ -1377,7 +1477,7 @@ bool TimelineManager::clearFolderContents(const juce::File& folder) const
 }
 
 //==============================================================================
-// ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ NEW: Show confirmation dialog for non-empty folder
+// ÃƒÆ’Ã‚Â¢Ãƒâ€¦Ã¢â‚¬Å“ÃƒÂ¢Ã¢â€šÂ¬Ã‚Â¦ NEW: Show confirmation dialog for non-empty folder
 bool TimelineManager::confirmOverwriteFolder(const juce::File& folder) const
 {
     if (isFolderEmpty(folder))

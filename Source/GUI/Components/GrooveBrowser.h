@@ -4,10 +4,12 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 #include "../../Core/MidiDissector.h"
 
+
 // Forward declarations
 class DrumGrooveProcessor;
 class DrumPartsColumn;
 class BrowserColumn;
+class SamplesManagerWindow;
 
 // Custom component that handles CTRL+Drag independently from ListBox
 class DraggableListItemOverlay : public juce::Component
@@ -136,6 +138,16 @@ public juce::DragAndDropContainer,
                     juce::Array<juce::File> getNavigationPath() const { return navigationPath; }
                     void restoreNavigationState(const juce::File& folder, const juce::Array<juce::File>& path);
 
+                    // Refresh target library combo box (called when libraries are added/removed)
+                    void refreshTargetLibraryCombo();
+
+                    DrumLibrary getCurrentTargetLibrary() const;
+
+                    // Public method for BPM change updates
+                    void updateLoopDurationForBPMChange();
+
+                    void showSamplesManager();
+
                 private:
                     DrumGrooveProcessor& processor;
 
@@ -163,14 +175,19 @@ public juce::DragAndDropContainer,
                     // Target library control
                     juce::Label targetLibraryLabel;
                     juce::ComboBox targetLibraryCombo;
+                    juce::TextButton editMappingsButton;
+                    juce::TextButton samplesManagerButton;
                     std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> libraryAttachment;
 
-                    // NEW: Browser playback state for loop and keyboard control
+                    //  Browser playback state for loop and keyboard control
                     bool browserPlaybackActive = false;
                     juce::File currentlyPlayingFile;
 
+                    // For BPM change handling in browser playback
+                    double currentPlaybackMidiTicks = 0.0;
+                    double currentPlaybackTPQN = 480.0;
+
                     // Helper methods
-                    DrumLibrary getCurrentTargetLibrary() const;
                     void handleTargetLibraryChange();
                     void redissectCurrentMidiFile();
                     void showFolderContextMenu(const juce::File& folder);
@@ -181,6 +198,7 @@ public juce::DragAndDropContainer,
                     void navigateToPreviousMidiFile();
                     BrowserColumn* getActiveFileColumn();
                     void playFileAtRow(BrowserColumn* column, int row);
+
 
                     // Column widths
                     static constexpr int FOLDER_COLUMN_WIDTH = 220;
@@ -204,6 +222,8 @@ public juce::DragAndDropContainer,
                     juce::File getCurrentFileForRow(int columnIndex, int row);
 
                     bool hasInitializedTargetLibrary = false;
+
+                    std::unique_ptr<juce::DocumentWindow> samplesManagerWindow;
 
                     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(GrooveBrowser)
                 };

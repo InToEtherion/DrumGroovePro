@@ -10,7 +10,7 @@
 void DrumPartDragOverlay::mouseDown(const juce::MouseEvent& e)
 {
     isDragging = false;
-    
+
     // Only handle CTRL clicks, pass everything else through
     if (!e.mods.isCtrlDown())
     {
@@ -21,14 +21,14 @@ void DrumPartDragOverlay::mouseDown(const juce::MouseEvent& e)
 
 void DrumPartDragOverlay::mouseDrag(const juce::MouseEvent& e)
 {
-    
+
     if (e.mods.isCtrlDown())
     {
         // CTRL+Drag = External drag to DAW
         if (!isDragging && e.getDistanceFromDragStart() > 5)
         {
             isDragging = true;
-            
+
             if (parentColumn)
             {
                 parentColumn->startExternalDrag(row);
@@ -53,7 +53,7 @@ void DrumPartDragOverlay::mouseUp(const juce::MouseEvent& e)
         // Pass through to ListBox
         e.eventComponent->getParentComponent()->mouseUp(e.getEventRelativeTo(e.eventComponent->getParentComponent()));
     }
-    
+
     isDragging = false;
 }
 
@@ -68,14 +68,22 @@ void DrumPartDragOverlay::mouseDoubleClick(const juce::MouseEvent& e)
 //==============================================================================
 
 DrumPartsColumn::DrumPartsColumn(DrumGrooveProcessor& p, const juce::String& columnName)
-    : processor(p), columnTitle(columnName), selectedRow(-1)
+: processor(p), columnTitle(columnName), selectedRow(-1)
 {
-    setOpaque(false);  
+    setOpaque(false);
     setModel(this);
-    setRowHeight(50);
-    
+    setRowHeight(50);  // Restore original size
+
     setColour(juce::ListBox::backgroundColourId, ColourPalette::mainBackground.withAlpha(0.8f));
+    setColour(juce::ListBox::outlineColourId, ColourPalette::borderColour);
     setMultipleSelectionEnabled(false);
+
+    // Configure scrollbar - make it always visible and prominent
+    auto& scrollbar = getVerticalScrollBar();
+    scrollbar.setAutoHide(false);
+    scrollbar.setColour(juce::ScrollBar::thumbColourId, juce::Colours::grey);
+    scrollbar.setColour(juce::ScrollBar::trackColourId, juce::Colours::darkgrey);
+    scrollbar.setColour(juce::ScrollBar::backgroundColourId, ColourPalette::secondaryBackground);
 }
 
 DrumPartsColumn::~DrumPartsColumn()
@@ -84,6 +92,23 @@ DrumPartsColumn::~DrumPartsColumn()
     {
         lastTempFile.deleteFile();
     }
+}
+
+void DrumPartsColumn::resized()
+{
+    // Call base class resized first
+    juce::ListBox::resized();
+
+    int totalContentHeight = getNumRows() * getRowHeight();
+    int availableHeight = getHeight();
+
+    DBG("DrumPartsColumn::resized - Rows: " + juce::String(getNumRows()) +
+    ", RowHeight: " + juce::String(getRowHeight()) +
+    ", TotalContent: " + juce::String(totalContentHeight) +
+    ", Available: " + juce::String(availableHeight));
+
+    // Update content to ensure proper scrollbar calculation
+    updateContent();
 }
 
 int DrumPartsColumn::getNumRows()
@@ -107,14 +132,14 @@ juce::Component* DrumPartsColumn::refreshComponentForRow(int rowNumber, bool isR
 {
     // Create or reuse overlay component for each row
     auto* overlay = dynamic_cast<DrumPartDragOverlay*>(existingComponentToUpdate);
-    
+
     if (overlay == nullptr)
     {
         overlay = new DrumPartDragOverlay(this);
     }
-    
+
     overlay->setRow(rowNumber);
-    
+
     return overlay;
 }
 
@@ -187,7 +212,7 @@ void DrumPartsColumn::drawNoteMapping(juce::Graphics& g, const DrumPart& part, j
     g.setColour(ColourPalette::secondaryText.withAlpha(0.8f));
 
     juce::String mappingText;
-    
+
     // Show original notes
     if (part.originalNotes.size() <= 3)
     {
@@ -200,15 +225,15 @@ void DrumPartsColumn::drawNoteMapping(juce::Graphics& g, const DrumPart& part, j
     }
     else
     {
-        mappingText += "Orig: " + juce::String(part.originalNotes[0]) + "..." + 
-                       juce::String(part.originalNotes.size()) + " notes";
+        mappingText += "Orig: " + juce::String(part.originalNotes[0]) + "..." +
+        juce::String(part.originalNotes.size()) + " notes";
     }
 
-    // Show remapped notes if different
-    if (!part.remappedNotes.isEmpty() && part.remappedNotes != part.originalNotes)
+    // Show remapped notes only if there are actual remappings
+    if (!part.remappedNotes.isEmpty())
     {
-        mappingText += " → ";
-        
+        mappingText += " -> ";
+
         if (part.remappedNotes.size() <= 3)
         {
             juce::StringArray noteStrings;
@@ -220,10 +245,10 @@ void DrumPartsColumn::drawNoteMapping(juce::Graphics& g, const DrumPart& part, j
         }
         else
         {
-            mappingText += "Target: " + juce::String(part.remappedNotes[0]) + "..." + 
-                           juce::String(part.remappedNotes.size()) + " notes";
+            mappingText += "Target: " + juce::String(part.remappedNotes[0]) + "..." +
+            juce::String(part.remappedNotes.size()) + " notes";
         }
-        
+
         // Use a slightly different color when notes are remapped
         g.setColour(ColourPalette::warningOrange.withAlpha(0.7f));
     }
@@ -246,8 +271,8 @@ void DrumPartsColumn::drawDrumPatternDots(juce::Graphics& g, const DrumPart& par
     if (totalDuration <= 0.0)
         totalDuration = 4.0; // Default to 4 beats
 
-    // Create array to track which dots should be lit
-    juce::Array<bool> dotLit;
+        // Create array to track which dots should be lit
+        juce::Array<bool> dotLit;
     dotLit.resize(numDots);
     dotLit.fill(false);
 
@@ -259,21 +284,21 @@ void DrumPartsColumn::drawDrumPatternDots(juce::Graphics& g, const DrumPart& par
         {
             double eventTime = event->message.getTimeStamp();
             double normalizedTime = eventTime / totalDuration;
-            
+
             // Quantize to 16th notes
-            int dotIndex = juce::jlimit(0, numDots - 1, 
-                                       static_cast<int>(normalizedTime * numDots));
+            int dotIndex = juce::jlimit(0, numDots - 1,
+                                        static_cast<int>(normalizedTime * numDots));
             dotLit.set(dotIndex, true);
         }
     }
 
     // Draw the dots
     float yCenter = bounds.getY() + bounds.getHeight() * 0.5f;
-    
+
     for (int i = 0; i < numDots; ++i)
     {
         float x = bounds.getX() + 5 + i * spacing;
-        
+
         if (dotLit[i])
         {
             g.setColour(part.colour.brighter(0.3f));
@@ -331,20 +356,24 @@ void DrumPartsColumn::setDrumParts(const juce::Array<DrumPart>& parts, const juc
     drumParts = parts;
     originalMidiFile = sourceFile;
     selectedRow = -1;
-    
+
     deselectAllRows();
-    
     updateContent();
 
+    // Trigger resized to update scrollbar visibility
+    resized();
+
     DBG("DrumPartsColumn: Set " + juce::String(parts.size()) + " drum parts for " + sourceFile.getFileName());
-    
+    DBG("  Total height needed: " + juce::String(parts.size() * getRowHeight()) +
+    ", Available height: " + juce::String(getHeight()));
+
     // Debug: Log note mapping information
     for (int i = 0; i < parts.size(); ++i)
     {
         const auto& part = parts[i];
-        DBG("  Part " + juce::String(i) + ": " + part.displayName + 
-            " - Original notes: " + juce::String(part.originalNotes.size()) + 
-            ", Remapped notes: " + juce::String(part.remappedNotes.size()));
+        DBG("  Part " + juce::String(i) + ": " + part.displayName +
+        " - Original notes: " + juce::String(part.originalNotes.size()) +
+        ", Remapped notes: " + juce::String(part.remappedNotes.size()));
     }
 }
 
@@ -353,9 +382,9 @@ void DrumPartsColumn::clearParts()
     drumParts.clear();
     originalMidiFile = juce::File();
     selectedRow = -1;
-    
+
     deselectAllRows();
-    
+
     updateContent();
 }
 
@@ -384,8 +413,8 @@ void DrumPartsColumn::playPart(const DrumPart& part)
 
     // Create temporary MIDI file with UNIQUE name
     juce::File tempFile = juce::File::getSpecialLocation(juce::File::tempDirectory)
-                         .getChildFile("DrumGroovePro_temp_part_" + 
-                                      juce::String(juce::Random::getSystemRandom().nextInt()) + ".mid");
+    .getChildFile("DrumGroovePro_temp_part_" +
+    juce::String(juce::Random::getSystemRandom().nextInt()) + ".mid");
 
     createTempMidiFile(part, tempFile);
 
@@ -401,7 +430,7 @@ void DrumPartsColumn::playPart(const DrumPart& part)
         // Get current BPM settings
         double bpm = 120.0;
         bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
-        
+
         if (syncToHost)
         {
             bpm = processor.getHostBPM();
@@ -416,8 +445,8 @@ void DrumPartsColumn::playPart(const DrumPart& part)
         processor.midiProcessor.setPlayheadPosition(0.0);
         processor.midiProcessor.play();
 
-        DBG("Playing drum part: " + part.displayName + " with " + 
-            juce::String(part.eventCount) + " events at " + juce::String(bpm, 2) + " BPM");
+        DBG("Playing drum part: " + part.displayName + " with " +
+        juce::String(part.eventCount) + " events at " + juce::String(bpm, 2) + " BPM");
     }
 }
 
@@ -425,18 +454,19 @@ void DrumPartsColumn::createTempMidiFile(const DrumPart& part, juce::File& tempF
 {
     DBG("=== createTempMidiFile ===");
     DBG("Part: " + part.displayName + ", Events: " + juce::String(part.sequence.getNumEvents()));
-    
+
     if (part.sequence.getNumEvents() == 0)
     {
         DBG("ERROR: Empty sequence!");
         return;
     }
-    
+
     // Get current BPM from processor
     bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
     double currentBPM = syncToHost ? processor.getHostBPM() : processor.parameters.getRawParameterValue("manualBPM")->load();
-    
-    // Get original file's BPM
+
+    // CRITICAL: Get original file's TPQN and BPM for proper tick scaling
+    int originalTPQN = 480;  // Default
     double originalBPM = 120.0;
     juce::FileInputStream inputStream(originalMidiFile);
     if (inputStream.openedOk())
@@ -444,6 +474,10 @@ void DrumPartsColumn::createTempMidiFile(const DrumPart& part, juce::File& tempF
         juce::MidiFile originalMidi;
         if (originalMidi.readFrom(inputStream))
         {
+            // Get TPQN
+            originalTPQN = originalMidi.getTimeFormat();
+            DBG("Preview: Original MIDI file TPQN: " + juce::String(originalTPQN));
+
             if (auto* firstTrack = originalMidi.getTrack(0))
             {
                 for (int i = 0; i < firstTrack->getNumEvents(); ++i)
@@ -451,35 +485,45 @@ void DrumPartsColumn::createTempMidiFile(const DrumPart& part, juce::File& tempF
                     const auto& event = firstTrack->getEventPointer(i)->message;
                     if (event.isTempoMetaEvent())
                     {
-                        originalBPM = 60000000.0 / event.getTempoMetaEventTickLength(480);
+                        originalBPM = 60000000.0 / event.getTempoMetaEventTickLength(originalTPQN);
                         break;
                     }
                 }
             }
         }
     }
-    
-    DBG("Original BPM: " + juce::String(originalBPM, 2) + ", Current BPM: " + juce::String(currentBPM, 2));
-    
+
+    DBG("Preview: Original BPM: " + juce::String(originalBPM, 2) + ", Current BPM: " + juce::String(currentBPM, 2));
+
     juce::MidiFile midiFile;
-    midiFile.setTicksPerQuarterNote(480);
+    int newTPQN = 480;
+    midiFile.setTicksPerQuarterNote(newTPQN);
 
     juce::MidiMessageSequence track;
-    
-    // Apply tempo scaling
-    double timeScale = originalBPM / currentBPM;
-    
+
+    // CRITICAL FIX: Apply both BPM scaling AND TPQN scaling
+    // BPM scaling: adjusts playback speed to match current BPM
+    // TPQN scaling: converts tick resolution from original to new file
+    double bpmScale = originalBPM / currentBPM;
+    double tpqnScale = static_cast<double>(newTPQN) / static_cast<double>(originalTPQN);
+    double combinedScale = bpmScale * tpqnScale;
+
+    DBG("Preview: BPM scale=" + juce::String(bpmScale, 4) +
+    ", TPQN scale=" + juce::String(tpqnScale, 4) +
+    ", Combined=" + juce::String(combinedScale, 4));
+
     for (int i = 0; i < part.sequence.getNumEvents(); ++i)
     {
         const auto* event = part.sequence.getEventPointer(i);
         if (event)
         {
             auto newEvent = event->message;
-            newEvent.setTimeStamp(event->message.getTimeStamp() * timeScale);
+            // Apply combined scaling: BPM adjustment AND TPQN conversion
+            newEvent.setTimeStamp(event->message.getTimeStamp() * combinedScale);
             track.addEvent(newEvent);
         }
     }
-    
+
     // Add tempo meta event at the beginning
     double microsecondsPerQuarterNote = 60000000.0 / currentBPM;
     auto tempoEvent = juce::MidiMessage::tempoMetaEvent(static_cast<int>(microsecondsPerQuarterNote));
@@ -504,7 +548,7 @@ void DrumPartsColumn::createTempMidiFile(const DrumPart& part, juce::File& tempF
             return;
         }
     }
-    
+
     // Verify
     if (tempFile.existsAsFile() && tempFile.getSize() > 0)
     {
@@ -535,32 +579,32 @@ void DrumPartsColumn::showContextMenu(int row, const juce::Point<int>& position)
 {
     if (row < 0 || row >= drumParts.size())
         return;
-    
+
     const auto& part = drumParts[row];
-    
+
     juce::PopupMenu menu;
     menu.addItem(1, "Export to Desktop...");
     menu.addSeparator();
     menu.addItem(2, "Show Original File in Explorer");
-    
+
     // Show menu at mouse position
     auto screenPos = localPointToGlobal(position);
     menu.showMenuAsync(juce::PopupMenu::Options()
-                          .withTargetScreenArea(juce::Rectangle<int>(screenPos.x, screenPos.y, 1, 1)),
-        [this, part](int result)
-        {
-            if (result == 1) // Export to Desktop
-            {
-                exportPartToDesktop(part);
-            }
-            else if (result == 2) // Show in Explorer
-            {
-                if (originalMidiFile.existsAsFile())
-                {
-                    originalMidiFile.revealToUser();
-                }
-            }
-        });
+    .withTargetScreenArea(juce::Rectangle<int>(screenPos.x, screenPos.y, 1, 1)),
+                       [this, part](int result)
+                       {
+                           if (result == 1) // Export to Desktop
+                           {
+                               exportPartToDesktop(part);
+                           }
+                           else if (result == 2) // Show in Explorer
+                           {
+                               if (originalMidiFile.existsAsFile())
+                               {
+                                   originalMidiFile.revealToUser();
+                               }
+                           }
+                       });
 }
 
 // NEW: Export drum part to Desktop
@@ -568,7 +612,7 @@ void DrumPartsColumn::exportPartToDesktop(const DrumPart& part)
 {
     DBG("=== EXPORT DRUM PART TO DESKTOP WITH BPM ADJUSTMENT ===");
     DBG("Part: " + part.displayName);
-    
+
     if (part.sequence.getNumEvents() == 0)
     {
         DBG("ERROR: Part has no MIDI events");
@@ -579,24 +623,24 @@ void DrumPartsColumn::exportPartToDesktop(const DrumPart& part)
             "OK");
         return;
     }
-    
+
     // Get current plugin BPM (header BPM)
     bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
-    double currentBPM = syncToHost ? processor.getHostBPM() 
-                                   : processor.parameters.getRawParameterValue("manualBPM")->load();
+    double currentBPM = syncToHost ? processor.getHostBPM()
+    : processor.parameters.getRawParameterValue("manualBPM")->load();
     DBG("Plugin BPM: " + juce::String(currentBPM, 2));
-    
+
     // Drum parts are typically at 120 BPM reference
     double originalBPM = 120.0;
     DBG("Part reference BPM: " + juce::String(originalBPM, 2));
-    
+
     // Get Desktop directory
     auto desktopDir = juce::File::getSpecialLocation(juce::File::userDesktopDirectory);
-    
+
     // Create a safe filename from the part name
     juce::String safeName = part.displayName;
     safeName = safeName.replaceCharacters("/\\:*?\"<>|", "_");
-    
+
     // Add original file name context if available
     juce::String baseFileName = safeName;
     if (originalMidiFile.existsAsFile())
@@ -604,10 +648,10 @@ void DrumPartsColumn::exportPartToDesktop(const DrumPart& part)
         juce::String originalName = originalMidiFile.getFileNameWithoutExtension();
         baseFileName = originalName + "_" + safeName;
     }
-    
+
     // Add BPM to filename for clarity
     baseFileName += "_" + juce::String(static_cast<int>(currentBPM)) + "bpm";
-    
+
     // Ensure unique filename
     juce::File exportFile = desktopDir.getChildFile(baseFileName + ".mid");
     int counter = 1;
@@ -616,104 +660,104 @@ void DrumPartsColumn::exportPartToDesktop(const DrumPart& part)
         exportFile = desktopDir.getChildFile(baseFileName + "_" + juce::String(counter) + ".mid");
         counter++;
     }
-    
+
     // Check if BPM adjustment is needed
     bool needsAdjustment = std::abs(currentBPM - originalBPM) > 0.1;
-    
+
     // Create MIDI file
     juce::MidiFile midiFile;
     midiFile.setTicksPerQuarterNote(960);
-    
+
     // Clone and adjust the sequence
     juce::MidiMessageSequence adjustedSequence;
-    
+
     // Add tempo event
     int microsecondsPerQuarterNote = static_cast<int>(60000000.0 / currentBPM);
     adjustedSequence.addEvent(juce::MidiMessage::tempoMetaEvent(microsecondsPerQuarterNote), 0.0);
-    
+
     if (needsAdjustment)
     {
         DBG("Applying BPM adjustment...");
-        
-        // ✅ CORRECTED: originalBPM / currentBPM (was backwards!)
+
+        // âœ… CORRECTED: originalBPM / currentBPM (was backwards!)
         double timeStretchRatio = originalBPM / currentBPM;
         DBG("Time stretch ratio: " + juce::String(timeStretchRatio, 4));
-        
+
         // Apply time stretch to all events
         for (int i = 0; i < part.sequence.getNumEvents(); ++i)
         {
             const auto* event = part.sequence.getEventPointer(i);
             if (!event) continue;
-            
+
             auto message = event->message;
-            
+
             // Skip tempo events
             if (message.isTempoMetaEvent())
                 continue;
-            
+
             // Apply time stretch to timestamp
             double originalTimestamp = message.getTimeStamp();
             double newTimestamp = originalTimestamp * timeStretchRatio;
             message.setTimeStamp(newTimestamp);
-            
+
             adjustedSequence.addEvent(message, message.getTimeStamp());
         }
     }
     else
     {
         DBG("No BPM adjustment needed");
-        
+
         // Copy events without time adjustment
         for (int i = 0; i < part.sequence.getNumEvents(); ++i)
         {
             const auto* event = part.sequence.getEventPointer(i);
             if (!event) continue;
-            
+
             auto message = event->message;
-            
+
             // Skip tempo events
             if (message.isTempoMetaEvent())
                 continue;
-            
+
             adjustedSequence.addEvent(message, message.getTimeStamp());
         }
     }
-    
+
     adjustedSequence.updateMatchedPairs();
     midiFile.addTrack(adjustedSequence);
-    
+
     // Write to file
     juce::FileOutputStream stream(exportFile);
     if (stream.openedOk())
     {
         midiFile.writeTo(stream);
         stream.flush();
-        
+
         DBG("Successfully exported to: " + exportFile.getFullPathName());
-        
+
         // Show success message with BPM info
         juce::String message = "Drum part exported to Desktop";
         if (needsAdjustment)
         {
-            message += "\n\nBPM adjusted: " + juce::String(originalBPM, 1) + " → " + juce::String(currentBPM, 1);
+            message += "\n\nBPM adjusted: " + juce::String(originalBPM, 1) + " -> " + juce::String(currentBPM, 1);
         }
         message += "\n\nFile: " + exportFile.getFileName();
-        
+
         // Show success message with option to reveal file
         juce::AlertWindow::showAsync(
             juce::MessageBoxOptions()
-                .withIconType(juce::AlertWindow::InfoIcon)
-                .withTitle("Export Successful")
-                .withMessage(message)
-                .withButton("OK")
-                .withButton("Show in Explorer"),
-            [exportFile](int result)
-            {
-                if (result == 2) // "Show in Explorer" button
-                {
-                    exportFile.revealToUser();
-                }
-            });
+            .withIconType(juce::AlertWindow::InfoIcon)
+            .withTitle("Export Successful")
+            .withMessage(message)
+            .withButton("OK")
+            .withButton("Show in Explorer"),
+                                     [exportFile](int result)
+                                     {
+                                         if (result == 2) // "Show in Explorer" button
+                                         {
+                                             exportFile.revealToUser();
+                                         }
+                                     });
     }
     else
     {
@@ -734,24 +778,24 @@ void DrumPartsColumn::startExternalDrag(int row)
 
         return;
     }
-    
+
     isExternalDragActive = true;
-    
+
     if (row < 0 || row >= drumParts.size())
     {
         isExternalDragActive = false;
         return;
     }
-    
+
     const auto& part = drumParts[row];
 
-    
+
     if (part.sequence.getNumEvents() == 0)
     {
         isExternalDragActive = false;
         return;
     }
-    
+
     // Get drag container
     auto* dragContainer = juce::DragAndDropContainer::findParentDragContainerFor(this);
     if (!dragContainer)
@@ -759,21 +803,21 @@ void DrumPartsColumn::startExternalDrag(int row)
         isExternalDragActive = false;
         return;
     }
-    
-    
+
+
     // Create temp file
     juce::File tempDir = juce::File::getSpecialLocation(juce::File::tempDirectory);
     // Create unique temp file with timestamp and random number
-	juce::String uniqueName = "DrumGroovePro_drag_part_" + 
-							juce::String(juce::Time::currentTimeMillis()) + "_" +
-							juce::String(juce::Random::getSystemRandom().nextInt(10000));
-	juce::File tempFile = tempDir.getChildFile(uniqueName + ".mid");
-    
-    
+    juce::String uniqueName = "DrumGroovePro_drag_part_" +
+    juce::String(juce::Time::currentTimeMillis()) + "_" +
+    juce::String(juce::Random::getSystemRandom().nextInt(10000));
+    juce::File tempFile = tempDir.getChildFile(uniqueName + ".mid");
+
+
     // Get BPMs
     bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
     double currentBPM = syncToHost ? processor.getHostBPM() : processor.parameters.getRawParameterValue("manualBPM")->load();
-    
+
     double originalBPM = 120.0;
     juce::FileInputStream inputStream(originalMidiFile);
     if (inputStream.openedOk())
@@ -796,14 +840,14 @@ void DrumPartsColumn::startExternalDrag(int row)
         }
     }
 
-    
+
     // Create MIDI file
     juce::MidiFile midiFile;
     midiFile.setTicksPerQuarterNote(480);
     juce::MidiMessageSequence track;
-    
+
     double timeScale = originalBPM / currentBPM;
-    
+
     for (int i = 0; i < part.sequence.getNumEvents(); ++i)
     {
         const auto* event = part.sequence.getEventPointer(i);
@@ -814,18 +858,18 @@ void DrumPartsColumn::startExternalDrag(int row)
             track.addEvent(newEvent);
         }
     }
-    
+
     // Add tempo
     double microsecondsPerQuarterNote = 60000000.0 / currentBPM;
     auto tempoEvent = juce::MidiMessage::tempoMetaEvent(static_cast<int>(microsecondsPerQuarterNote));
     tempoEvent.setTimeStamp(0.0);
     track.addEvent(tempoEvent, 0.0);
-    
+
     track.sort();
     track.updateMatchedPairs();
     midiFile.addTrack(track);
 
-    
+
     // Write file
     {
         juce::FileOutputStream outputStream(tempFile);
@@ -834,68 +878,68 @@ void DrumPartsColumn::startExternalDrag(int row)
             isExternalDragActive = false;
             return;
         }
-        
+
         if (!midiFile.writeTo(outputStream))
         {
             isExternalDragActive = false;
             return;
         }
-        
+
         outputStream.flush();
     }
-    
+
     juce::Thread::sleep(50);
-    
+
     if (!tempFile.existsAsFile())
     {
         isExternalDragActive = false;
         return;
     }
-    
+
     juce::int64 fileSize = tempFile.getSize();
     if (fileSize == 0)
     {
         isExternalDragActive = false;
         return;
     }
-    
-    
+
+
     // Cleanup old file - try multiple times if locked
-	if (lastTempFile.existsAsFile())
-	{
-		for (int i = 0; i < 3; ++i)
-		{
-			if (lastTempFile.deleteFile())
-				break;
-			juce::Thread::sleep(100);  // Wait if file is locked
-		}
-	}
-	lastTempFile = tempFile;
-    
+    if (lastTempFile.existsAsFile())
+    {
+        for (int i = 0; i < 3; ++i)
+        {
+            if (lastTempFile.deleteFile())
+                break;
+            juce::Thread::sleep(100);  // Wait if file is locked
+        }
+    }
+    lastTempFile = tempFile;
+
     // Perform drag
     juce::StringArray files;
     files.add(tempFile.getFullPathName());
-    
-    
+
+
     dragContainer->performExternalDragDropOfFiles(files, true, this, [this, tempFile]()
-	{
-		isExternalDragActive = false;
-		
-		// Wait longer and try multiple times to delete
-		juce::Timer::callAfterDelay(5000, [tempFile]()
-		{
-			if (tempFile.existsAsFile())
-			{
-				for (int i = 0; i < 5; ++i)
-				{
-					if (tempFile.deleteFile())
-					{
-						break;
-					}
-					juce::Thread::sleep(200);
-				}
-			}
-		});
-	});
-    
+    {
+        isExternalDragActive = false;
+
+        // Wait longer and try multiple times to delete
+        juce::Timer::callAfterDelay(5000, [tempFile]()
+        {
+            if (tempFile.existsAsFile())
+            {
+                for (int i = 0; i < 5; ++i)
+                {
+                    if (tempFile.deleteFile())
+                    {
+                        break;
+                    }
+                    juce::Thread::sleep(200);
+                }
+            }
+        });
+    });
+
 }

@@ -6,6 +6,7 @@
 #include "Components/MultiTrackContainer.h"
 #include "Components/TimelineControls.h"
 #include "Components/FilePathDisplay.h"
+#include "Components/SectionBar.h"
 #include "LookAndFeel/ColourPalette.h"
 #include "LookAndFeel/DrumGrooveLookAndFeel.h"
 #include <algorithm>
@@ -24,9 +25,38 @@ MainComponent::MainComponent(DrumGrooveProcessor& p)
     multiTrackContainer = std::make_unique<MultiTrackContainer>(processor);  // Replaces Timeline
     multiTrackContainer->addChangeListener(this);  // Listen for selection changes
     timelineControls = std::make_unique<TimelineControls>(processor, *multiTrackContainer);
-    
+    sectionBar = std::make_unique<SectionBar>(processor, processor.sectionManager);
+
     // Set timeline controls reference in multi-track container
     multiTrackContainer->setTimelineControls(timelineControls.get());
+
+    headerSection->onBPMChanged = [this](double newBPM) {
+        // Update Global BPM for BAR mode (always)
+        processor.sectionManager.setGlobalBPM(newBPM);
+
+        // Update empty tracks ONLY if bypass is not enabled
+        if (multiTrackContainer && !headerSection->isBypassTrackBPMSync())
+            multiTrackContainer->updateEmptyTracksBPM(newBPM);
+
+        // NEW: Update groove browser loop duration when BPM changes
+        if (grooveBrowser)
+            grooveBrowser->updateLoopDurationForBPMChange();
+    };
+
+    // Connect track BPM control state changes
+    headerSection->onTrackBPMControlStateChanged = [this](bool enabled) {
+        // Update all track BPM controls enabled/disabled state
+        if (multiTrackContainer)
+            multiTrackContainer->updateAllTrackBPMControlsState(enabled);
+    };
+
+    // Initialize track BPM control states based on current settings
+    if (headerSection && multiTrackContainer)
+    {
+        headerSection->updateTrackBPMControlsState();
+    }
+
+    sectionBar = std::make_unique<SectionBar>(processor, processor.sectionManager);
 
     // Connect folder panel to groove browser
     folderPanel->onFolderSelected = [this](const juce::File& folder) {
@@ -49,24 +79,25 @@ MainComponent::MainComponent(DrumGrooveProcessor& p)
     addAndMakeVisible(grooveBrowser.get());
     addAndMakeVisible(filePathDisplay.get());
     addAndMakeVisible(timelineControls.get());
+    addAndMakeVisible(sectionBar.get());
     addAndMakeVisible(multiTrackContainer.get());  // Multi-track container
-    
+
     // Load background image from Resources folder - try multiple paths
     juce::Array<juce::File> searchPaths;
-    
+
     // Path 1: Next to executable (for development)
     auto executableFile = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
     searchPaths.add(executableFile.getParentDirectory().getChildFile("Resources").getChildFile("background").getChildFile("background.png"));
-    
+
     // Path 2: VST3 bundle structure (for installed VST3)
     searchPaths.add(executableFile.getParentDirectory().getParentDirectory().getChildFile("Resources").getChildFile("background").getChildFile("background.png"));
-    
+
     // Path 3: Alternative VST3 structure
     searchPaths.add(executableFile.getParentDirectory().getParentDirectory().getParentDirectory().getChildFile("Resources").getChildFile("background").getChildFile("background.png"));
-    
+
     // Path 4: Current working directory (fallback)
     searchPaths.add(juce::File::getCurrentWorkingDirectory().getChildFile("Resources").getChildFile("background").getChildFile("background.png"));
-    
+
     bool imageLoaded = false;
     for (const auto& path : searchPaths)
     {
@@ -82,7 +113,7 @@ MainComponent::MainComponent(DrumGrooveProcessor& p)
             }
         }
     }
-    
+
     if (!imageLoaded)
     {
         DBG("Background image not found in any of the search paths");
@@ -96,18 +127,18 @@ void MainComponent::paint(juce::Graphics& g)
 {
     // Fill with black background first
     g.fillAll(juce::Colours::black);
-    
+
     // Draw the background image centered if loaded
     if (backgroundImage.isValid())
     {
         auto bounds = getLocalBounds();
         int imageWidth = backgroundImage.getWidth();
         int imageHeight = backgroundImage.getHeight();
-        
+
         // Calculate centered position
         int x = (bounds.getWidth() - imageWidth) / 2;
         int y = (bounds.getHeight() - imageHeight) / 2;
-        
+
         // Draw image centered - black will show on sides if GUI is larger
         g.drawImageAt(backgroundImage, x, y);
     }
@@ -130,7 +161,7 @@ void MainComponent::paint(juce::Graphics& g)
     auto drumGrooveWidth = juce::GlyphArrangement::getStringWidthInt(font, "DrumGroove");
     auto proWidth = juce::GlyphArrangement::getStringWidthInt(font, "Pro");
     auto totalWidth = drumGrooveWidth + proWidth;
-    
+
     auto startX = titleBounds.getX() + (titleBounds.getWidth() - totalWidth) / 2;
 
     // Center vertically in the 50px title area
@@ -157,34 +188,50 @@ void MainComponent::resized()
 {
     auto bounds = getLocalBounds();
 
-    // Title area - 50px at top
-    bounds.removeFromTop(50);
+    // Title area - 75px at top
+    bounds.removeFromTop(75);
 
-    // Header section (only BPM controls) - 40px
+    // Header section (BPM controls) - 40px (FIXED)
     int headerHeight = 40;
     headerSection->setBounds(bounds.removeFromTop(headerHeight));
 
-    // GrooveBrowser and FolderPanel area - everything EXCEPT timeline at bottom
-    // Calculate how much space timeline needs: 30 (ruler) + 40 (controls) + 25 (file path) + space for 3 tracks
-    int minTimelineHeight = 30 + 40 + 25 + (3 * 80);  // = 335px minimum for 3 tracks
-    
-    // Reserve space for timeline at bottom - use minTimelineHeight
-    auto timelineBounds = bounds.removeFromBottom(minTimelineHeight);
-    
-    // NOW split the REMAINING space between folder panel and groove browser
+    // Define minimum heights
+    int folderPanelMinHeight = 400; // Minimum for Library Folders + Favorites
+    int timelineControlsHeight = 25 + 40 + 40; // FilePathDisplay + TimelineControls + SectionBar
+    int minTimelineTracksHeight = 240; // Minimum 3 tracks
+    int minTimelineHeight = timelineControlsHeight + minTimelineTracksHeight;
+
+    int availableHeight = bounds.getHeight();
+
+    // Calculate how to split: give priority to timeline expansion
+    int timelineHeight = minTimelineHeight;
+    int topSectionHeight = availableHeight - timelineHeight;
+
+    // If we have extra space, give it to the timeline
+    if (topSectionHeight > folderPanelMinHeight)
+    {
+        timelineHeight = availableHeight - folderPanelMinHeight;
+        topSectionHeight = folderPanelMinHeight;
+    }
+
+    // Top section: FolderPanel (left, 270px) + GrooveBrowser (right)
+    auto topSection = bounds.removeFromTop(topSectionHeight);
     int folderPanelWidth = 270;
-    folderPanel->setBounds(bounds.removeFromLeft(folderPanelWidth));
-    grooveBrowser->setBounds(bounds);  // Takes all remaining vertical space
-    
+    folderPanel->setBounds(topSection.removeFromLeft(folderPanelWidth));
+    grooveBrowser->setBounds(topSection);
+
     // Timeline section at bottom
-    // File path display above timeline controls
+    auto timelineBounds = bounds; // All remaining space
+
+    // Timeline controls (fixed height)
     int filePathHeight = 25;
     filePathDisplay->setBounds(timelineBounds.removeFromTop(filePathHeight));
-
-    // Timeline controls
     timelineControls->setBounds(timelineBounds.removeFromTop(40));
 
-    // Multi-track container uses remaining timeline space
+    int sectionBarHeight = 40;
+    sectionBar->setBounds(timelineBounds.removeFromTop(sectionBarHeight));
+
+    // Multi-track container uses ALL remaining space
     multiTrackContainer->setBounds(timelineBounds);
 
     repaint();
@@ -321,7 +368,7 @@ MainComponent::GuiState MainComponent::saveGuiState() const
     {
         state.selectedFile = filePathDisplay->getCurrentFile();
     }
-    
+
     // CRITICAL: Save MultiTrackContainer state (tracks, clips, BPM, etc.)
     if (multiTrackContainer)
     {
@@ -348,7 +395,7 @@ void MainComponent::restoreGuiState(const GuiState& state)
     {
         filePathDisplay->setFilePath(state.selectedFile);
     }
-    
+
     // Note: MultiTrackContainer state is restored separately in PluginEditor
     // to ensure proper timing and component initialization
 }
@@ -362,7 +409,7 @@ void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
         {
             double startTime = multiTrackContainer->getSelectionStart();
             double endTime = multiTrackContainer->getSelectionEnd();
-            
+
             // Update timeline control fields
             timelineControls->setLoopStartTime(startTime);
             timelineControls->setLoopEndTime(endTime);

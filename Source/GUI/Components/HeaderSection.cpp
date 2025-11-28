@@ -19,11 +19,30 @@ void HeaderSection::setupComponents()
 {
     auto& lnf = DrumGrooveLookAndFeel::getInstance();
 
-    // Create parameter attachments
-    syncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
-        processor.parameters, "syncToHost", syncToHostButton);
-    bpmAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
-        processor.parameters, "manualBPM", manualBPMSlider);
+    // Create parameter attachments with safety checks
+    if (processor.parameters.getParameter("syncToHost") != nullptr)
+    {
+        syncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(
+            processor.parameters, "syncToHost", syncToHostButton);
+    }
+    else
+    {
+        DBG("ERROR: syncToHost parameter not found!");
+    }
+
+    if (processor.parameters.getParameter("manualBPM") != nullptr)
+    {
+        bpmAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(
+            processor.parameters, "manualBPM", manualBPMSlider);
+    }
+    else
+    {
+        DBG("ERROR: manualBPM parameter not found - using manual callback");
+        // Fallback: manually sync slider changes
+        manualBPMSlider.onValueChange = [this]() {
+            // Direct sync without attachment
+        };
+    }
 
     // BPM Controls - WIDER SYNC BUTTON for full text
     syncToHostButton.setButtonText("Sync to Host");
@@ -34,6 +53,13 @@ void HeaderSection::setupComponents()
     syncToHostButton.setTooltip("Sync to Host BPM");
     addAndMakeVisible(syncToHostButton);
 
+    // Bypass Track BPM Sync checkbox
+    bypassTrackBPMSyncButton.setButtonText("Bypass Track BPM Sync");
+    bypassTrackBPMSyncButton.setToggleState(false, juce::dontSendNotification);
+    bypassTrackBPMSyncButton.addListener(this);
+    bypassTrackBPMSyncButton.setTooltip("When enabled, tracks default to 120 BPM and don't sync with Header BPM changes");
+    addAndMakeVisible(bypassTrackBPMSyncButton);
+
     manualBPMLabel.setText("Manual BPM:", juce::dontSendNotification);
     manualBPMLabel.setFont(lnf.getSmallFont());
     addAndMakeVisible(manualBPMLabel);
@@ -43,6 +69,7 @@ void HeaderSection::setupComponents()
     manualBPMSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     manualBPMSlider.setTextBoxStyle(juce::Slider::TextBoxAbove, false, 50, 18);
     manualBPMSlider.setTextValueSuffix(" BPM");
+    manualBPMSlider.addListener(this);
     addAndMakeVisible(manualBPMSlider);
 
     currentBPMLabel.setText("Current: Host 120 BPM", juce::dontSendNotification);
@@ -63,28 +90,48 @@ void HeaderSection::resized()
 {
     auto bounds = getLocalBounds().reduced(10, 5);
 
-    // SMALLER sync button - reduced from 90px to 75px width and from 20px to 18px height
+    // Sync to Host button
     syncToHostButton.setBounds(bounds.removeFromLeft(75).withHeight(18));
-    bounds.removeFromLeft(8);  // Slightly more spacing
+    bounds.removeFromLeft(8);
 
+    // Bypass checkbox - right after Sync to Host, smaller width
+    bypassTrackBPMSyncButton.setBounds(bounds.removeFromLeft(115).withHeight(18));
+    bounds.removeFromLeft(10);
+
+    // Manual BPM controls
     manualBPMLabel.setBounds(bounds.removeFromLeft(70).withHeight(25));
     manualBPMSlider.setBounds(bounds.removeFromLeft(100).withHeight(30));
     bounds.removeFromLeft(10);
+
+    // Current BPM label
     currentBPMLabel.setBounds(bounds.removeFromLeft(150).withHeight(25));
 }
 
 void HeaderSection::buttonClicked(juce::Button* button)
 {
-    if (button == &syncToHostButton)
+    if (button == &syncToHostButton || button == &bypassTrackBPMSyncButton)
     {
-        updateBPMControlsVisibility();
-        
-        if (processor.midiProcessor.isPlaying())
+        if (button == &syncToHostButton)
         {
+            updateBPMControlsVisibility();
+
+            // Calculate new BPM
             bool syncToHost = syncToHostButton.getToggleState();
             double newBPM = syncToHost ? processor.getHostBPM() : manualBPMSlider.getValue();
-            processor.midiProcessor.updateTrackBPM(0, newBPM);
+
+            // ALWAYS notify about BPM change (whether playing or not)
+            if (onBPMChanged)
+                onBPMChanged(newBPM);
+
+            // Update MIDI processor only during playback
+            if (processor.midiProcessor.isPlaying())
+            {
+                processor.midiProcessor.updateTrackBPM(0, newBPM);
+            }
         }
+
+        // Update track BPM control states whenever either button changes
+        updateTrackBPMControlsState();
     }
 }
 
@@ -98,10 +145,17 @@ void HeaderSection::sliderValueChanged(juce::Slider* slider)
     if (slider == &manualBPMSlider)
     {
         updateBPMDisplay();
-        
+
+        // Calculate new BPM
+        double newBPM = manualBPMSlider.getValue();
+
+        // ALWAYS notify about BPM change (whether playing or not)
+        if (onBPMChanged)
+            onBPMChanged(newBPM);
+
+        // Update MIDI processor only during playback
         if (processor.midiProcessor.isPlaying())
         {
-            double newBPM = manualBPMSlider.getValue();
             processor.midiProcessor.updateTrackBPM(0, newBPM);
         }
     }
@@ -131,5 +185,25 @@ void HeaderSection::updateBPMDisplay()
         double manualBPM = manualBPMSlider.getValue();
         currentBPMLabel.setText("Current: Manual " + juce::String(manualBPM, 1) + " BPM",
                                 juce::dontSendNotification);
+    }
+}
+
+void HeaderSection::updateTrackBPMControlsState()
+{
+    // Logic: Track BPM controls should be enabled UNLESS syncToHost is checked AND bypass is unchecked
+    // In other words:
+    // - If syncToHost = false (unchecked) → Enable track BPM (regardless of bypass)
+    // - If syncToHost = true AND bypass = false → Disable track BPM (grayed out)
+    // - If syncToHost = true AND bypass = true → Enable track BPM
+
+    bool syncToHost = syncToHostButton.getToggleState();
+    bool bypassEnabled = bypassTrackBPMSyncButton.getToggleState();
+
+    bool shouldEnableTrackBPM = !syncToHost || bypassEnabled;
+
+    // Notify via callback
+    if (onTrackBPMControlStateChanged)
+    {
+        onTrackBPMControlStateChanged(shouldEnableTrackBPM);
     }
 }

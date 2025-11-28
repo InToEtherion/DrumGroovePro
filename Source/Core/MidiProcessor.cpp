@@ -1,5 +1,6 @@
 #include "MidiProcessor.h"
 #include "DrumLibraryManager.h"
+#include <cmath>  // For std::round and std::lround
 
 MidiProcessor::MidiProcessor(DrumLibraryManager& drumLibManager)
 : drumLibraryManager(drumLibManager)
@@ -7,11 +8,11 @@ MidiProcessor::MidiProcessor(DrumLibraryManager& drumLibManager)
     sampleRate = 44100.0;
     samplesPerBlock = 512;
     currentBPM = 120.0;
-    
+
     // Atomics are initialized in header with default values
     // playheadPosition.store(0.0);  // Already initialized to 0.0 in header
     // playing.store(false);         // Already initialized to false in header
-    
+
     loopEnabled = false;
     loopStart = 0.0;
     loopEnd = 4.0;
@@ -132,7 +133,7 @@ void MidiProcessor::processBlock(juce::MidiBuffer& midiMessages, double bpm, Dru
     // OPTIMIZATION: Atomic operations done OUTSIDE critical section
     // These don't need the clipLock since they're already thread-safe
     playheadPosition.store(blockEndTime);
-    
+
     if (loopRestarted)
     {
         // Update playhead position after loop restart
@@ -172,7 +173,7 @@ void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLi
     // This is the minimal scope needed - fast operation, won't block audio thread
     // ============================================================================
     juce::ScopedLock sl(clipLock);
-    
+
     // THREAD-SAFE: Read playhead position atomically
     double currentPosition = playheadPosition.load();
     seekClipToTime(*clip, currentPosition);
@@ -218,7 +219,7 @@ void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLi
     // This is the minimal scope needed - fast operation, won't block audio thread
     // ============================================================================
     juce::ScopedLock sl(clipLock);
-    
+
     // THREAD-SAFE: Read playhead position atomically
     double currentPosition = playheadPosition.load();
     seekClipToTime(*clip, currentPosition);
@@ -230,7 +231,7 @@ void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLi
 void MidiProcessor::updateTrackBPM(int trackNumber, double newBPM)
 {
     juce::ScopedLock sl(clipLock);
-    
+
     // THREAD-SAFE: Read playhead position atomically once
     double currentPosition = playheadPosition.load();
 
@@ -259,7 +260,7 @@ void MidiProcessor::updateTrackBPM(int trackNumber, double newBPM)
 void MidiProcessor::updateClipBoundaries(const juce::String& clipId, double newStartTime, double newDuration)
 {
     juce::ScopedLock sl(clipLock);
-    
+
     // THREAD-SAFE: Read playhead position atomically once
     double currentPosition = playheadPosition.load();
 
@@ -555,7 +556,14 @@ void MidiProcessor::processClipWithSampleAccuracy(MidiClipPlayback& clip, juce::
         }
 
         double relativeTime = absoluteEventTime - blockStartTime;
-        int sampleOffset = static_cast<int>(relativeTime * sampleRate);
+
+        // ============================================================================
+        // CRITICAL FIX: Use std::lround instead of static_cast<int> for proper rounding
+        // static_cast<int> truncates (3.9 -> 3), causing cumulative timing drift
+        // std::lround rounds properly (3.9 -> 4, 3.4 -> 3)
+        // This is especially important for fast double kick patterns at high BPM
+        // ============================================================================
+        int sampleOffset = static_cast<int>(std::lround(relativeTime * sampleRate));
 
         // Clamp negative offsets (rounding errors) to 0
         if (sampleOffset < 0)
@@ -598,15 +606,14 @@ void MidiProcessor::processClipWithSampleAccuracy(MidiClipPlayback& clip, juce::
     if (!clipShouldLoop)
     {
         // Standard end-of-clip logic for non-looping clips
-        if (clip.currentEventIndex >= clip.sequence.getNumEvents() ||
-            clip.unscaledLocalTime >= unscaledDuration ||
-            blockEndTime >= clipEndTime)
+        if (clip.unscaledLocalTime >= unscaledDuration)
         {
             clip.isActive = false;
         }
     }
-    // If clipShouldLoop is true, NEVER mark inactive here - let loop restart handle it
+    // If looping, the loop restart logic in processBlock handles reactivation
 }
+
 
 // ============================================================================
 // CRITICAL: seekClipToTime must handle boundary notes correctly

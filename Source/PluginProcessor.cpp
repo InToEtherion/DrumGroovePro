@@ -2,6 +2,8 @@
 #include "PluginEditor.h"
 #include "GUI/MainComponent.h"
 #include "GUI/Components/MultiTrackContainer.h"
+#include "GUI/Components/GrooveBrowser.h"
+#include "GUI/Components/AudioTrack.h"
 
 DrumGrooveProcessor::DrumGrooveProcessor()
 : AudioProcessor(BusesProperties()
@@ -28,7 +30,7 @@ midiProcessor(drumLibraryManager)
     // Initialize GUI state tree with default values
     guiStateTree.setProperty("currentBrowserFolder", "", nullptr);
     guiStateTree.setProperty("selectedFile", "", nullptr);
-    guiStateTree.setProperty("editorWidth", 1400, nullptr);
+    guiStateTree.setProperty("editorWidth", 1500, nullptr);
     guiStateTree.setProperty("editorHeight", 900, nullptr);
     guiStateTree.setProperty("editorX", -1, nullptr);
     guiStateTree.setProperty("editorY", -1, nullptr);
@@ -42,8 +44,15 @@ midiProcessor(drumLibraryManager)
     // Listen for parameter changes (including when state is restored)
     parameters.addParameterListener("visualLatencyOffset", this);
 
-    // Initialize visual latency offset in MidiProcessor from parameter
-    midiProcessor.setVisualLatencyOffset(getVisualLatencyOffset());
+    // Load global settings (includes visual latency offset) from persistent storage
+    // This runs BEFORE any DAW project state is restored
+    loadGlobalSettings();
+
+    // Initialize Global BPM with current effective BPM (for BAR mode)
+    sectionManager.setGlobalBPM(getCurrentEffectiveBPM());
+
+    cachedLibraryNames.clear();
+    libraryNamesNeedUpdate.store(true);
 }
 
 DrumGrooveProcessor::~DrumGrooveProcessor()
@@ -53,10 +62,17 @@ DrumGrooveProcessor::~DrumGrooveProcessor()
     drumLibraryManager.saveConfiguration();
 }
 
+void DrumGrooveProcessor::updateLibraryNamesCache()
+{
+    cachedLibraryNames = drumLibraryManager.getLoadedLibraryNames();
+    libraryNamesNeedUpdate.store(false);
+}
+
 const juce::String DrumGrooveProcessor::getName() const
 {
     return JucePlugin_Name;
 }
+
 
 bool DrumGrooveProcessor::acceptsMidi() const
 {
@@ -105,12 +121,32 @@ void DrumGrooveProcessor::changeProgramName(int /*index*/, const juce::String& /
 
 void DrumGrooveProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
 {
+    currentSampleRate = sampleRate;
     midiProcessor.prepareToPlay(sampleRate, samplesPerBlock);
+    drumMixer.prepareToPlay(sampleRate, samplesPerBlock);
+    sampleEngine.prepareToPlay(sampleRate, samplesPerBlock);
+    audioBuffer.setSize(2, samplesPerBlock);
+    audioTrackBuffer.setSize(2, samplesPerBlock);
+
+    // Initialize per-part buffers
+    for (auto& buffer : partBuffers)
+    {
+        buffer.setSize(2, samplesPerBlock);
+    }
+
+    // Prepare registered audio tracks
+    for (auto* track : registeredAudioTracks)
+    {
+        if (track)
+            track->prepareToPlay(sampleRate);
+    }
 }
 
 void DrumGrooveProcessor::releaseResources()
 {
     midiProcessor.releaseResources();
+    drumMixer.reset();
+    sampleEngine.releaseResources();
 }
 
 #ifndef JucePlugin_PreferredChannelConfigurations
@@ -151,42 +187,6 @@ bool DrumGrooveProcessor::isBusesLayoutSupported(const BusesLayout& layouts) con
 }
 #endif
 
-void DrumGrooveProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
-{
-    juce::ScopedNoDenormals noDenormals;
-    auto totalNumInputChannels = getTotalNumInputChannels();
-    auto totalNumOutputChannels = getTotalNumOutputChannels();
-
-    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
-        buffer.clear(i, 0, buffer.getNumSamples());
-
-    // Get current BPM
-    double currentBPM = 120.0;
-    bool syncToHost = parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
-
-    if (syncToHost)
-    {
-        if (auto* playHead = getPlayHead())
-        {
-            if (auto position = playHead->getPosition())
-            {
-                if (position->getBpm().hasValue())
-                    currentBPM = *position->getBpm();
-            }
-        }
-    }
-    else
-    {
-        currentBPM = parameters.getRawParameterValue("manualBPM")->load();
-    }
-
-    // Get target library
-    int libraryIndex = static_cast<int>(parameters.getRawParameterValue("targetLibrary")->load());
-    DrumLibrary targetLibrary = static_cast<DrumLibrary>(libraryIndex + 1);
-
-    // Process MIDI with correct parameters
-    midiProcessor.processBlock(midiMessages, currentBPM, targetLibrary);
-}
 
 juce::AudioProcessorEditor* DrumGrooveProcessor::createEditor()
 {
@@ -195,22 +195,25 @@ juce::AudioProcessorEditor* DrumGrooveProcessor::createEditor()
 
 void DrumGrooveProcessor::getStateInformation(juce::MemoryBlock& destData)
 {
-    // Save complete GUI state before serializing
     saveCompleteGuiState();
-
     auto state = parameters.copyState();
 
-    // Append GUI state tree to the main state
     if (guiStateTree.isValid())
-    {
         state.appendChild(guiStateTree.createCopy(), nullptr);
-    }
+
+    // Save section state
+    auto sectionState = sectionManager.saveState();
+    if (sectionState.isValid())
+        state.appendChild(sectionState, nullptr);
+
+    // Save DrumMixer state for persistence
+    auto mixerState = drumMixer.saveState();
+    if (mixerState.isValid())
+        state.appendChild(mixerState, nullptr);
 
     auto xml = state.createXml();
     if (xml != nullptr)
-    {
         copyXmlToBinary(*xml, destData);
-    }
 }
 
 
@@ -219,117 +222,142 @@ void DrumGrooveProcessor::setStateInformation(const void* data, int sizeInBytes)
     // SAFETY: Validate input data
     if (data == nullptr || sizeInBytes <= 0)
         return;
-    
+
     auto xmlState = getXmlFromBinary(data, sizeInBytes);
 
     if (xmlState != nullptr && xmlState->hasTagName(parameters.state.getType()))
     {
         auto newState = juce::ValueTree::fromXml(*xmlState);
-        
+
         // SAFETY: Verify the new state is valid before replacing
         if (!newState.isValid())
             return;
-        
+
+        // Replace parameter state
         parameters.replaceState(newState);
 
-        // Find and store GUI state tree IN MEMORY (no restoration yet)
-        auto guiChild = newState.getChildWithName("GuiState");
-        if (guiChild.isValid())
+        // SAFETY: Restore GUI state tree carefully
+        auto newGuiState = newState.getChildWithName("GuiState");
+        if (newGuiState.isValid())
         {
-            guiStateTree = guiChild;
+            // Clear existing GUI state
+            guiStateTree.removeAllChildren(nullptr);
+            guiStateTree.removeAllProperties(nullptr);
+
+            // Copy properties from new state
+            for (int i = 0; i < newGuiState.getNumProperties(); ++i)
+            {
+                auto propName = newGuiState.getPropertyName(i);
+                guiStateTree.setProperty(propName, newGuiState.getProperty(propName), nullptr);
+            }
+
+            // Copy children from new state
+            for (int i = 0; i < newGuiState.getNumChildren(); ++i)
+            {
+                guiStateTree.appendChild(newGuiState.getChild(i).createCopy(), nullptr);
+            }
         }
 
-        // CRITICAL FIX: Force parameter notification to update GUI controls
-        // NOTE: Capturing 'this' is safe here because AudioProcessor deletion happens on message thread
+        // Restore section manager state
+        auto sectionState = newState.getChildWithName("Sections");
+        if (sectionState.isValid())
+        {
+            sectionManager.restoreState(sectionState);
+        }
+
+        // Restore DrumMixer state for persistence
+        auto mixerState = newState.getChildWithName("DrumMixer");
+        if (mixerState.isValid())
+        {
+            drumMixer.restoreState(mixerState);
+        }
+
+        // IMPORTANT: Explicitly restore visual latency offset to MidiProcessor
+        // Parameter listeners may not fire reliably during replaceState()
+        if (auto* latencyParam = parameters.getRawParameterValue("visualLatencyOffset"))
+        {
+            float restoredLatency = latencyParam->load();
+            midiProcessor.setVisualLatencyOffset(restoredLatency);
+            DBG("Restored visual latency offset: " + juce::String(restoredLatency) + " ms");
+        }
+
+        // IMPORTANT: Sync Global BPM with current effective BPM after restore
+        // This ensures BAR mode uses the correct BPM even in old project files
+        sectionManager.setGlobalBPM(getCurrentEffectiveBPM());
+
+        // SAFETY: Defer GUI restoration to ensure all components are initialized
         juce::MessageManager::callAsync([this]()
         {
-            // SAFETY: Check if parameter exists before accessing
-            auto* targetLibValuePtr = parameters.getRawParameterValue("targetLibrary");
-            if (!targetLibValuePtr)
-                return;
-            
-            float targetLibValue = targetLibValuePtr->load();
-
-            DBG("=== VST3 State Loaded ===");
-            DBG("Target Library parameter value: " + juce::String(targetLibValue));
-
-            auto* targetLibParam = parameters.getParameter("targetLibrary");
-            if (targetLibParam)
-            {
-                targetLibParam->setValue(targetLibValue);
-                targetLibParam->sendValueChangedMessageToListeners(targetLibValue);
-            }
+            restoreCompleteGuiState();
         });
     }
 }
+
 
 juce::AudioProcessorValueTreeState::ParameterLayout DrumGrooveProcessor::createParameterLayout()
 {
     juce::AudioProcessorValueTreeState::ParameterLayout layout;
 
-    // Sync to Host parameter
-    layout.add(std::make_unique<juce::AudioParameterBool>(
-        "syncToHost",
-        "Sync to Host",
-        true));
-
-    // Manual BPM parameter (used when not syncing to host)
+    // Manual BPM parameter
     layout.add(std::make_unique<juce::AudioParameterFloat>(
         "manualBPM",
         "Manual BPM",
         juce::NormalisableRange<float>(20.0f, 300.0f, 0.1f),
                                                            120.0f));
 
-    // Target Library parameter - CRITICAL: Order MUST match enum order (excluding Unknown=0)
-    // This ensures parameter index + 1 = enum value
+    // Sync to host parameter
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        "syncToHost",
+        "Sync to Host",
+        true));
+
+    // Target Library parameter - FIXED: Use alphabetically sorted list matching GUI
     juce::StringArray libraryChoices;
-    libraryChoices.add("Bypass (No Remapping)");       // 0 → Bypass = 1
-    libraryChoices.add("General MIDI");                // 1 → GeneralMIDI = 2
-    libraryChoices.add("Superior Drummer 3");          // 2 → SuperiorDrummer3 = 3
-    libraryChoices.add("Addictive Drums 2");           // 3 → AddictiveDrums2 = 4
-    libraryChoices.add("Battery 4");                   // 4 → Battery4 = 5
-    libraryChoices.add("EZdrummer");                   // 5 → EZdrummer = 6
-    libraryChoices.add("GetGood Drums");               // 6 → GetGoodDrums = 7
-    libraryChoices.add("Steven Slate Drums");          // 7 → StevenSlateDrums = 8
-    libraryChoices.add("Ugritone");                    // 8 → Ugritone = 9
-    libraryChoices.add("BFD3");                        // 9 → BFD3 = 10
-    libraryChoices.add("MT Power Drum Kit 2");         // 10 → MTPowerDrumKit2 = 11
-    libraryChoices.add("DrumGizmo");                   // 11 → DrumGizmo = 12
-    libraryChoices.add("Sitala");                      // 12 → Sitala = 13
-    libraryChoices.add("Krimh Drums");                 // 13 → KrimhDrums = 14
-    libraryChoices.add("The Monarch Kit");             // 14 → TheMonarchKit = 15
-    libraryChoices.add("Shreddage Drums");             // 15 → ShreddageDrums = 16
-    libraryChoices.add("Damage 2");                    // 16 → Damage2 = 17
-    libraryChoices.add("Triaz");                       // 17 → Triaz = 18
-    libraryChoices.add("MODO Drum");                   // 18 → MODODrum = 19
-    libraryChoices.add("Drum Locker");                 // 19 → DrumLocker = 20
+
+    // Get the sorted library list from DrumLibraryManager
+    // This matches exactly what GrooveBrowser uses
+    DrumLibraryManager tempManager;
+    libraryChoices = tempManager.getLoadedLibraryNames();
 
     layout.add(std::make_unique<juce::AudioParameterChoice>(
         "targetLibrary",
         "Target Library",
         libraryChoices,
-        1)); // Default to "General MIDI" (index 1 → enum 2)
+        libraryChoices.indexOf("General MIDI"))); // Default to General MIDI
 
-        // Track Solo parameter
-        layout.add(std::make_unique<juce::AudioParameterBool>(
-            "trackSolo",
-            "Track Solo",
-            false));
+    // Track Solo parameter
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        "trackSolo",
+        "Track Solo",
+        false));
 
-        // Track Mute parameter
-        layout.add(std::make_unique<juce::AudioParameterBool>(
-            "trackMute",
-            "Track Mute",
-            false));
+    // Track Mute parameter
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        "trackMute",
+        "Track Mute",
+        false));
 
-        // Visual Latency Offset parameter (in milliseconds)
-        layout.add(std::make_unique<juce::AudioParameterFloat>(
-            "visualLatencyOffset",
-            "Visual Latency Offset (ms)",
-            juce::NormalisableRange<float>(-200.0f, 0.0f, 1.0f),
-            -20.0f)); // Default: -20ms
+    // Visual Latency Offset parameter (in milliseconds)
+    layout.add(std::make_unique<juce::AudioParameterFloat>(
+        "visualLatencyOffset",
+        "Visual Latency Offset (ms)",
+                                                           juce::NormalisableRange<float>(-200.0f, 0.0f, 1.0f),
+                                                           -20.0f)); // Default: -20ms
 
-        return layout;
+    // Audio mode toggle
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        "audioMode",
+        "Audio Mode",
+        false));  // Default: MIDI mode
+    //layout.add(std::make_unique<juce::AudioParameterBool>("audioMode", "Audio Mode", false));
+
+    // Master EQ enable
+    layout.add(std::make_unique<juce::AudioParameterBool>(
+        "masterEQEnabled",
+        "Master EQ Enabled",
+        false));
+
+    return layout;
 }
 
 // GUI State Management Implementation
@@ -339,7 +367,7 @@ DrumGrooveProcessor::GuiState DrumGrooveProcessor::getGuiState() const
 
     state.currentBrowserFolder = guiStateTree.getProperty("currentBrowserFolder", "");
     state.selectedFile = guiStateTree.getProperty("selectedFile", "");
-    state.editorWidth = guiStateTree.getProperty("editorWidth", 1400);
+    state.editorWidth = guiStateTree.getProperty("editorWidth", 1500);
     state.editorHeight = guiStateTree.getProperty("editorHeight", 900);
     state.editorX = guiStateTree.getProperty("editorX", -1);
     state.editorY = guiStateTree.getProperty("editorY", -1);
@@ -397,38 +425,38 @@ juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
 void DrumGrooveProcessor::saveCompleteGuiState()
 {
     // SAFETY: Comprehensive nullptr checking to prevent crashes during state save
-    
+
     // Step 1: Check if there's an active editor
     auto* editor = getActiveEditor();
     if (!editor)
         return; // No editor open, nothing to save
-    
-    // Step 2: Try to cast to our specific editor type
-    auto* drumEditor = dynamic_cast<DrumGrooveEditor*>(editor);
+
+        // Step 2: Try to cast to our specific editor type
+        auto* drumEditor = dynamic_cast<DrumGrooveEditor*>(editor);
     if (!drumEditor)
         return; // Not our editor type (shouldn't happen, but be safe)
-    
-    // Step 3: Check if editor has children before accessing child 0
-    if (drumEditor->getNumChildComponents() == 0)
-        return; // Editor not fully initialized yet
-    
-    // Step 4: Get the first child component
-    auto* firstChild = drumEditor->getChildComponent(0);
-    if (!firstChild)
-        return; // Child component doesn't exist
-    
-    // Step 5: Try to cast to MainComponent
-    auto* mainComp = dynamic_cast<MainComponent*>(firstChild);
-    if (!mainComp)
-        return; // First child is not MainComponent (shouldn't happen, but be safe)
-    
-    // Step 6: Get MultiTrackContainer from MainComponent
-    auto* container = mainComp->getMultiTrackContainer();
-    if (!container)
-        return; // MultiTrackContainer not initialized yet
-    
-    // All checks passed - safe to save state
-    saveCompleteGuiState(container);
+
+        // Step 3: Check if editor has children before accessing child 0
+        if (drumEditor->getNumChildComponents() == 0)
+            return; // Editor not fully initialized yet
+
+            // Step 4: Get the first child component
+            auto* firstChild = drumEditor->getChildComponent(0);
+        if (!firstChild)
+            return; // Child component doesn't exist
+
+            // Step 5: Try to cast to MainComponent
+            auto* mainComp = dynamic_cast<MainComponent*>(firstChild);
+        if (!mainComp)
+            return; // First child is not MainComponent (shouldn't happen, but be safe)
+
+            // Step 6: Get MultiTrackContainer from MainComponent
+            auto* container = mainComp->getMultiTrackContainer();
+        if (!container)
+            return; // MultiTrackContainer not initialized yet
+
+            // All checks passed - safe to save state
+            saveCompleteGuiState(container);
 }
 
 void DrumGrooveProcessor::saveCompleteGuiState(MultiTrackContainer* container)
@@ -456,52 +484,392 @@ void DrumGrooveProcessor::saveCompleteGuiState(MultiTrackContainer* container)
 void DrumGrooveProcessor::restoreCompleteGuiState()
 {
     // SAFETY: Comprehensive nullptr checking to prevent crashes during state restore
-    
+
     // Step 1: Check if there's an active editor
     auto* editor = getActiveEditor();
     if (!editor)
         return; // No editor open, nothing to restore
-    
-    // Step 2: Try to cast to our specific editor type
-    auto* drumEditor = dynamic_cast<DrumGrooveEditor*>(editor);
+
+        // Step 2: Try to cast to our specific editor type
+        auto* drumEditor = dynamic_cast<DrumGrooveEditor*>(editor);
     if (!drumEditor)
         return; // Not our editor type (shouldn't happen, but be safe)
-    
-    // Step 3: Check if editor has children before accessing child 0
-    if (drumEditor->getNumChildComponents() == 0)
-        return; // Editor not fully initialized yet
-    
-    // Step 4: Get the first child component
-    auto* firstChild = drumEditor->getChildComponent(0);
-    if (!firstChild)
-        return; // Child component doesn't exist
-    
-    // Step 5: Try to cast to MainComponent
-    auto* mainComp = dynamic_cast<MainComponent*>(firstChild);
-    if (!mainComp)
-        return; // First child is not MainComponent (shouldn't happen, but be safe)
-    
-    // Step 6: Get MultiTrackContainer from MainComponent
-    auto* container = mainComp->getMultiTrackContainer();
-    if (!container)
-        return; // MultiTrackContainer not initialized yet
-    
-    // Step 7: Verify we have valid state to restore
-    if (!guiStateTree.isValid())
-        return; // No valid state to restore
-    
-    // All checks passed - safe to restore state
-    container->restoreGuiState(guiStateTree);
+
+        // Step 3: Check if editor has children before accessing child 0
+        if (drumEditor->getNumChildComponents() == 0)
+            return; // Editor not fully initialized yet
+
+            // Step 4: Get the first child component
+            auto* firstChild = drumEditor->getChildComponent(0);
+        if (!firstChild)
+            return; // Child component doesn't exist
+
+            // Step 5: Try to cast to MainComponent
+            auto* mainComp = dynamic_cast<MainComponent*>(firstChild);
+        if (!mainComp)
+            return; // First child is not MainComponent (shouldn't happen, but be safe)
+
+            // Step 6: Get MultiTrackContainer from MainComponent
+            auto* container = mainComp->getMultiTrackContainer();
+        if (!container)
+            return; // MultiTrackContainer not initialized yet
+
+            // Step 7: Verify we have valid state to restore
+            if (!guiStateTree.isValid())
+                return; // No valid state to restore
+
+                // All checks passed - safe to restore state
+                container->restoreGuiState(guiStateTree);
 }
 
 void DrumGrooveProcessor::parameterChanged(const juce::String& parameterID, float newValue)
 {
     if (parameterID == "visualLatencyOffset")
     {
-        juce::File logFile = juce::File::getSpecialLocation(juce::File::userDesktopDirectory)
-        .getChildFile("visual_playhead.log");
-        logFile.appendText("\nCALLBACK: " + juce::String(newValue) + "ms\n");
-
         midiProcessor.setVisualLatencyOffset(newValue);
+    }
+}
+
+GrooveBrowser* DrumGrooveProcessor::getGrooveBrowser() const
+{
+    // Try to get GrooveBrowser through the editor chain
+    auto* editor = getActiveEditor();
+    if (!editor)
+        return nullptr;
+
+    auto* drumEditor = dynamic_cast<DrumGrooveEditor*>(editor);
+    if (!drumEditor)
+        return nullptr;
+
+    auto* mainComp = drumEditor->getMainComponent();
+    if (!mainComp)
+        return nullptr;
+
+    return mainComp->getGrooveBrowser();
+}
+
+void DrumGrooveProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+{
+    juce::ScopedNoDenormals noDenormals;
+    auto totalNumInputChannels = getTotalNumInputChannels();
+    auto totalNumOutputChannels = getTotalNumOutputChannels();
+
+    for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
+        buffer.clear(i, 0, buffer.getNumSamples());
+
+    // Get current BPM
+    double currentBPM = 120.0;
+    bool syncToHost = parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
+
+    if (syncToHost)
+    {
+        if (auto* playHead = getPlayHead())
+        {
+            if (auto position = playHead->getPosition())
+            {
+                if (position->getBpm().hasValue())
+                    currentBPM = *position->getBpm();
+            }
+        }
+    }
+    else
+    {
+        currentBPM = parameters.getRawParameterValue("manualBPM")->load();
+    }
+
+    // Get target library
+    int libraryIndex = static_cast<int>(parameters.getRawParameterValue("targetLibrary")->load());
+
+    if (libraryNamesNeedUpdate.load())
+        updateLibraryNamesCache();
+    const auto& sortedNames = cachedLibraryNames;
+
+    DrumLibrary targetLibrary = DrumLibrary::GeneralMIDI;
+    if (libraryIndex >= 0 && libraryIndex < sortedNames.size())
+    {
+        juce::String libraryName = sortedNames[libraryIndex];
+        targetLibrary = drumLibraryManager.getLibraryFromName(libraryName);
+    }
+
+    // Get section-aware playback BPM
+    double playheadPos = midiProcessor.getPlayheadPosition();
+    const Section* currentSection = sectionManager.getSectionAtTime(playheadPos, currentBPM);
+    double playbackBPM = currentBPM;
+
+    if (currentSection && currentSection->playbackBPM > 0.0)
+        playbackBPM = currentSection->playbackBPM;
+
+    // CRITICAL FIX: Always process MIDI first to advance playhead and generate MIDI
+    midiProcessor.processBlock(midiMessages, playbackBPM, targetLibrary);
+
+    // Check audio mode
+    bool audioMode = isAudioMode();
+
+    if (audioMode && sampleEngine.isLoaded())
+    {
+        // AUDIO MODE: Route MIDI through sample engine with per-part processing
+
+        const int numSamples = buffer.getNumSamples();
+
+        // Ensure per-part buffers are correct size
+        for (auto& partBuffer : partBuffers)
+        {
+            if (partBuffer.getNumSamples() != numSamples)
+            {
+                partBuffer.setSize(2, numSamples, false, false, true);
+            }
+        }
+
+        // Ensure output buffer is correct size
+        if (audioBuffer.getNumSamples() != numSamples)
+        {
+            audioBuffer.setSize(2, numSamples, false, false, true);
+        }
+        audioBuffer.clear();
+
+        // Process MIDI through sample engine to per-part buffers
+        sampleEngine.processBlockToPartBuffers(partBuffers, midiMessages);
+
+        // Process per-part buffers through drum mixer (applies EQ, volume, pan, reverb per part)
+        drumMixer.processPerPartBuffers(partBuffers, audioBuffer);
+
+        // Copy to output
+        for (int ch = 0; ch < juce::jmin(buffer.getNumChannels(), audioBuffer.getNumChannels()); ++ch)
+        {
+            buffer.copyFrom(ch, 0, audioBuffer, ch, 0, numSamples);
+        }
+
+        // Mix in audio tracks if any are registered and playing
+        if (midiProcessor.isPlaying())
+        {
+            juce::SpinLock::ScopedTryLockType lock(audioTrackLock);
+            if (lock.isLocked() && !registeredAudioTracks.empty())
+            {
+                // Ensure audio track buffer is correct size
+                if (audioTrackBuffer.getNumSamples() != numSamples)
+                {
+                    audioTrackBuffer.setSize(2, numSamples, false, false, true);
+                }
+
+                double playheadSecs = midiProcessor.getPlayheadPosition();
+
+                for (auto* track : registeredAudioTracks)
+                {
+                    if (track && track->isLoaded() && !track->isMuted())
+                    {
+                        audioTrackBuffer.clear();
+                        juce::AudioSourceChannelInfo info(&audioTrackBuffer, 0, numSamples);
+                        track->getNextAudioBlock(info, playheadSecs, 1.0);
+
+                        // Add to main buffer
+                        for (int ch = 0; ch < juce::jmin(buffer.getNumChannels(), audioTrackBuffer.getNumChannels()); ++ch)
+                        {
+                            buffer.addFrom(ch, 0, audioTrackBuffer, ch, 0, numSamples);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Clear MIDI output in audio mode
+        midiMessages.clear();
+    }
+    else
+    {
+        // MIDI MODE: Output MIDI directly, mix in audio tracks only
+        buffer.clear();
+
+        // Mix in audio tracks if any are registered and playing
+        if (!registeredAudioTracks.empty() && midiProcessor.isPlaying())
+        {
+            const int numSamples = buffer.getNumSamples();
+
+            // Ensure audio track buffer is correct size
+            if (audioTrackBuffer.getNumSamples() != numSamples)
+            {
+                audioTrackBuffer.setSize(2, numSamples, false, false, true);
+            }
+
+            double playheadSecs = midiProcessor.getPlayheadPosition();
+
+            for (auto* track : registeredAudioTracks)
+            {
+                if (track && track->isLoaded() && !track->isMuted())
+                {
+                    audioTrackBuffer.clear();
+                    juce::AudioSourceChannelInfo info(&audioTrackBuffer, 0, numSamples);
+                    track->getNextAudioBlock(info, playheadSecs, 1.0);
+
+                    // Add to main buffer
+                    for (int ch = 0; ch < juce::jmin(buffer.getNumChannels(), audioTrackBuffer.getNumChannels()); ++ch)
+                    {
+                        buffer.addFrom(ch, 0, audioTrackBuffer, ch, 0, numSamples);
+                    }
+                }
+            }
+        }
+    }
+}
+
+void DrumGrooveProcessor::setAudioMode(bool enabled)
+{
+    if (auto* param = parameters.getRawParameterValue("audioMode"))
+        *param = enabled ? 1.0f : 0.0f;
+}
+
+bool DrumGrooveProcessor::loadDrumSamples()
+{
+    juce::File baseDir = juce::File::getSpecialLocation(juce::File::userDocumentsDirectory)
+    .getChildFile("DrumGroovePro").getChildFile("Samples");
+
+    // Try to find any drum kit in the Samples directory (SFZ format only)
+    juce::File samplesDir;
+
+    // Check for salamanderDrumkit first (preferred SFZ format)
+    auto salamanderDir = baseDir.getChildFile("salamanderDrumkit");
+    if (salamanderDir.exists() && salamanderDir.isDirectory())
+    {
+        auto sfzFile = salamanderDir.getChildFile("ALL.sfz");
+        if (sfzFile.existsAsFile())
+        {
+            samplesDir = salamanderDir;
+            DBG("Found salamanderDrumkit (SFZ format)");
+        }
+    }
+
+    // If not found, search for any SFZ kit in the base Samples directory
+    if (!samplesDir.exists())
+    {
+        auto subdirs = baseDir.findChildFiles(juce::File::findDirectories, false);
+        for (const auto& subdir : subdirs)
+        {
+            // Check for SFZ format (ALL.sfz file)
+            auto sfzFile = subdir.getChildFile("ALL.sfz");
+            if (sfzFile.existsAsFile())
+            {
+                samplesDir = subdir;
+                DBG("Found SFZ kit: " + subdir.getFileName());
+                break;
+            }
+        }
+    }
+
+    if (!samplesDir.exists())
+    {
+        DBG("No SFZ drum kit samples found in: " + baseDir.getFullPathName());
+        return false;
+    }
+
+    DBG("Loading SFZ format from: " + samplesDir.getFullPathName());
+    return sampleEngine.loadSamplesFromDirectory(samplesDir);
+}
+
+bool DrumGrooveProcessor::hasAudioTracks() const
+{
+    juce::SpinLock::ScopedLockType lock(audioTrackLock);
+    return !registeredAudioTracks.empty();
+}
+
+void DrumGrooveProcessor::registerAudioTrack(AudioTrack* track)
+{
+    if (track == nullptr)
+        return;
+
+    juce::SpinLock::ScopedLockType lock(audioTrackLock);
+
+    // Check if already registered
+    auto it = std::find(registeredAudioTracks.begin(), registeredAudioTracks.end(), track);
+    if (it == registeredAudioTracks.end())
+    {
+        registeredAudioTracks.push_back(track);
+        track->prepareToPlay(currentSampleRate);
+    }
+}
+
+void DrumGrooveProcessor::unregisterAudioTrack(AudioTrack* track)
+{
+    juce::SpinLock::ScopedLockType lock(audioTrackLock);
+
+    auto it = std::find(registeredAudioTracks.begin(), registeredAudioTracks.end(), track);
+    if (it != registeredAudioTracks.end())
+    {
+        registeredAudioTracks.erase(it);
+    }
+}
+
+void DrumGrooveProcessor::clearAudioTracks()
+{
+    juce::SpinLock::ScopedLockType lock(audioTrackLock);
+    registeredAudioTracks.clear();
+}
+
+// =============================================================================
+// Global Settings Persistence
+// These settings persist across plugin sessions (even without a DAW project)
+// =============================================================================
+
+juce::File DrumGrooveProcessor::getGlobalSettingsFile() const
+{
+    return juce::File::getSpecialLocation(juce::File::userApplicationDataDirectory)
+    .getChildFile("DrumGroovePro")
+    .getChildFile("settings.xml");
+}
+
+void DrumGrooveProcessor::loadGlobalSettings()
+{
+    juce::File settingsFile = getGlobalSettingsFile();
+
+    if (!settingsFile.existsAsFile())
+    {
+        // No settings file - use defaults
+        DBG("No global settings file found, using defaults");
+        midiProcessor.setVisualLatencyOffset(-20.0);  // Default -20ms
+        return;
+    }
+
+    auto xml = juce::XmlDocument::parse(settingsFile);
+    if (xml == nullptr || !xml->hasTagName("DrumGrooveProSettings"))
+    {
+        DBG("Invalid global settings file, using defaults");
+        midiProcessor.setVisualLatencyOffset(-20.0);
+        return;
+    }
+
+    // Load visual latency offset
+    float latencyMs = static_cast<float>(xml->getDoubleAttribute("visualLatencyOffset", -20.0));
+    latencyMs = juce::jlimit(-200.0f, 0.0f, latencyMs);
+
+    // Apply to parameter and MidiProcessor
+    if (auto* param = parameters.getRawParameterValue("visualLatencyOffset"))
+    {
+        param->store(latencyMs);
+    }
+    midiProcessor.setVisualLatencyOffset(latencyMs);
+
+    DBG("Loaded global settings: visualLatencyOffset = " + juce::String(latencyMs) + " ms");
+}
+
+void DrumGrooveProcessor::saveGlobalSettings()
+{
+    juce::File settingsFile = getGlobalSettingsFile();
+
+    // Ensure directory exists
+    settingsFile.getParentDirectory().createDirectory();
+
+    // Create XML document
+    juce::XmlElement settings("DrumGrooveProSettings");
+
+    // Save visual latency offset
+    float latencyMs = getVisualLatencyOffset();
+    settings.setAttribute("visualLatencyOffset", latencyMs);
+
+    // Write to file
+    if (!settings.writeTo(settingsFile))
+    {
+        DBG("ERROR: Failed to save global settings to: " + settingsFile.getFullPathName());
+    }
+    else
+    {
+        DBG("Saved global settings: visualLatencyOffset = " + juce::String(latencyMs) + " ms");
     }
 }

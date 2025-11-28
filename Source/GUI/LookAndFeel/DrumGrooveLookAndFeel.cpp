@@ -50,7 +50,11 @@ void DrumGrooveLookAndFeel::drawButtonBackground(juce::Graphics& g, juce::Button
     else if (isMouseOverButton)
         bg = ColourPalette::buttonHover;
     else if (button.getToggleState())
-        bg = ColourPalette::primaryBlue;
+    {
+        // FIXED: Use the button's own buttonOnColourId instead of always using primaryBlue
+        // This allows Solo (yellow) and Mute (red) buttons to have their correct colors
+        bg = button.findColour(juce::TextButton::buttonOnColourId);
+    }
     else
         bg = backgroundColour;
 

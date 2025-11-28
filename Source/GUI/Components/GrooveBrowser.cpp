@@ -1,5 +1,7 @@
 #include "GrooveBrowser.h"
 #include "DrumPartsColumn.h"
+#include "DrumLibraryMappingEditor.h"
+#include "SamplesManagerWindow.h"
 #include "../../PluginProcessor.h"
 #include "../LookAndFeel/ColourPalette.h"
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
@@ -28,9 +30,9 @@ void DraggableListItemOverlay::mouseDown(const juce::MouseEvent& e)
 void DraggableListItemOverlay::mouseDrag(const juce::MouseEvent& e)
 {
     #if JUCE_LINUX
-    DBG("mouseDrag: Ctrl=" + juce::String(e.mods.isCtrlDown()) +
-    " Alt=" + juce::String(e.mods.isAltDown()) +
-    " Shift=" + juce::String(e.mods.isShiftDown()) +
+    DBG("mouseDrag: Ctrl=" + juce::String(e.mods.isCtrlDown() ? "yes" : "no") +
+    " Alt=" + juce::String(e.mods.isAltDown() ? "yes" : "no") +
+    " Shift=" + juce::String(e.mods.isShiftDown() ? "yes" : "no") +
     " Distance=" + juce::String(e.getDistanceFromDragStart()));
     #endif
 
@@ -393,6 +395,29 @@ void BrowserColumn::startExternalDrag(int rowNumber)
 
     DBG("Current BPM: " + juce::String(currentBPM, 2));
 
+    // Determine source library for this file
+    DrumLibrary sourceLib = DrumLibrary::Unknown;
+    for (int i = 0; i < processor.drumLibraryManager.getNumRootFolders(); ++i)
+    {
+        auto rootFolder = processor.drumLibraryManager.getRootFolder(i);
+        if (originalMidiFile.getFullPathName().startsWith(rootFolder.getFullPathName()))
+        {
+            sourceLib = processor.drumLibraryManager.getRootFolderSourceLibrary(i);
+            DBG("Source library: " + juce::String(static_cast<int>(sourceLib)));
+            break;
+        }
+    }
+
+    // Get target library for remapping
+    DrumLibrary targetLib = grooveBrowser->getCurrentTargetLibrary();
+    DBG("Target library: " + juce::String(static_cast<int>(targetLib)));
+
+    // Determine if note remapping is needed
+    bool needsRemapping = (targetLib != DrumLibrary::Bypass &&
+    sourceLib != DrumLibrary::Unknown &&
+    sourceLib != targetLib);
+    DBG("Needs remapping: " + juce::String(needsRemapping ? "YES" : "NO"));
+
     // Read original MIDI to check BPM
     juce::MidiFile originalMidi;
     juce::FileInputStream inputStream(originalMidiFile);
@@ -425,10 +450,15 @@ void BrowserColumn::startExternalDrag(int rowNumber)
 
     juce::File fileToDrag;
 
-    // Only create temp file if BPM adjustment is needed
-    if (std::abs(originalBPM - currentBPM) > 0.01)
+    // Create temp file if BPM adjustment OR remapping is needed
+    bool needsBPMAdjustment = std::abs(originalBPM - currentBPM) > 0.01;
+    if (needsBPMAdjustment || needsRemapping)
     {
-        DBG("BPM adjustment needed: " + juce::String(originalBPM, 2) + " -> " + juce::String(currentBPM, 2));
+        if (needsBPMAdjustment)
+            DBG("BPM adjustment needed: " + juce::String(originalBPM, 2) + " -> " + juce::String(currentBPM, 2));
+        if (needsRemapping)
+            DBG("Note remapping needed: Source " + juce::String(static_cast<int>(sourceLib)) +
+            " -> Target " + juce::String(static_cast<int>(targetLib)));
 
         // Create temp file with unique name
         juce::String tempFileName = "DrumGroovePro_drag_" +
@@ -441,7 +471,7 @@ void BrowserColumn::startExternalDrag(int rowNumber)
         double tempoScale = originalBPM / currentBPM;
         juce::MidiFile adjustedMidi;
 
-        // Copy all tracks and scale timestamps
+        // Copy all tracks and scale timestamps + remap notes
         for (int track = 0; track < originalMidi.getNumTracks(); ++track)
         {
             auto* sourceTrack = originalMidi.getTrack(track);
@@ -451,7 +481,7 @@ void BrowserColumn::startExternalDrag(int rowNumber)
             {
                 auto& midiEvent = sourceTrack->getEventPointer(i)->message;
                 double oldTimestamp = sourceTrack->getEventTime(i);
-                double newTimestamp = oldTimestamp * tempoScale;
+                double newTimestamp = needsBPMAdjustment ? (oldTimestamp * tempoScale) : oldTimestamp;
 
                 // Update tempo events with new BPM
                 if (midiEvent.isTempoMetaEvent())
@@ -465,6 +495,23 @@ void BrowserColumn::startExternalDrag(int rowNumber)
                 {
                     auto copiedMessage = midiEvent;
                     copiedMessage.setTimeStamp(newTimestamp);
+
+                    // Apply note remapping for note on/off events
+                    if (needsRemapping && copiedMessage.isNoteOnOrOff())
+                    {
+                        uint8_t originalNote = static_cast<uint8_t>(copiedMessage.getNoteNumber());
+                        uint8_t remappedNote = processor.drumLibraryManager.mapNoteToLibrary(
+                            originalNote,
+                            sourceLib,
+                            targetLib);
+
+                        if (remappedNote != originalNote)
+                        {
+                            copiedMessage.setNoteNumber(remappedNote);
+                            DBG("Remapped note: " + juce::String(originalNote) + " -> " + juce::String(remappedNote));
+                        }
+                    }
+
                     newTrack.addEvent(copiedMessage);
                 }
             }
@@ -537,7 +584,7 @@ void BrowserColumn::startExternalDrag(int rowNumber)
     else
     {
         #if JUCE_LINUX
-        // CRITICAL: On Linux, always create a temp copy even without BPM adjustment
+        // CRITICAL: On Linux, always create a temp copy even without BPM adjustment or remapping
         // Reaper may not have access to the original file location
         DBG("Linux: Creating temp copy for Reaper compatibility");
 
@@ -568,9 +615,9 @@ void BrowserColumn::startExternalDrag(int rowNumber)
             lastTempDragFile.deleteFile();
         lastTempDragFile = tempFile;
         #else
-        // Windows/Mac: Can use original file directly
+        // Windows/Mac: Can use original file directly (no BPM adjustment, no remapping needed)
         fileToDrag = originalMidiFile;
-        DBG("No BPM adjustment needed, using original file");
+        DBG("No BPM adjustment or remapping needed, using original file");
         #endif
     }
 
@@ -597,7 +644,7 @@ void BrowserColumn::startExternalDrag(int rowNumber)
     #if JUCE_LINUX
     DBG("Linux file path: " + fileToDrag.getFullPathName());
     DBG("File exists: " + juce::String(fileToDrag.existsAsFile() ? "YES" : "NO"));
-    DBG("File URL: " + fileToDrag.getFullPathName().toRawUTF8());
+    DBG("File URL: " + fileToDrag.getFullPathName());
     #endif
 
     // Use absolute path
@@ -645,13 +692,36 @@ isHandlingTargetLibraryChange(false)
     addAndMakeVisible(targetLibraryLabel);
 
     // Populate combo box with library names (in alphabetical order)
-    auto libraryNames = DrumLibraryManager::getAllLibraryNames();
+    auto libraryNames = processor.drumLibraryManager.getLoadedLibraryNames();
     for (int i = 0; i < libraryNames.size(); ++i)
     {
         targetLibraryCombo.addItem(libraryNames[i], i + 1);
     }
 
     addAndMakeVisible(targetLibraryCombo);
+
+    // NEW: Edit Mappings button
+    editMappingsButton.setButtonText("Edit");
+    editMappingsButton.setTooltip("Edit drum library mappings");
+    editMappingsButton.onClick = [this]()
+    {
+        // Open the mapping editor as a modal dialog with refresh callback
+        DrumLibraryMappingEditor::showEditor(processor.drumLibraryManager, this,
+                                             [this]()
+                                             {
+                                                 // This callback is called when libraries are added/removed in the editor
+                                                 refreshTargetLibraryCombo();
+                                             });
+    };
+    addAndMakeVisible(editMappingsButton);
+
+    // Samples Manager button
+    samplesManagerButton.setButtonText("Samples Manager");
+    samplesManagerButton.setTooltip("Download internal drum samples");
+    samplesManagerButton.setColour(juce::TextButton::buttonColourId, ColourPalette::primaryBlue);
+    samplesManagerButton.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    samplesManagerButton.onClick = [this]() { showSamplesManager(); };
+    addAndMakeVisible(samplesManagerButton);
 
     // Load saved library ENUM from config
     DrumLibrary savedLibrary = processor.drumLibraryManager.getLastSelectedTargetLibrary();
@@ -739,6 +809,11 @@ GrooveBrowser::~GrooveBrowser()
     targetLibraryCombo.removeListener(this);
     processor.parameters.removeParameterListener("targetLibrary", this);
     removeKeyListener(this);
+    if (samplesManagerWindow != nullptr)
+    {
+        samplesManagerWindow->setVisible(false);
+        samplesManagerWindow.reset();
+    }
 }
 
 void GrooveBrowser::paint(juce::Graphics& g)
@@ -750,6 +825,15 @@ void GrooveBrowser::paint(juce::Graphics& g)
 void GrooveBrowser::resized()
 {
     auto bounds = getLocalBounds();
+
+    // NEW: Edit button row at top - one row above Target Library
+    auto editRow = bounds.removeFromTop(30);
+    auto editRightSection = editRow.removeFromRight(350);
+    samplesManagerButton.setBounds(editRightSection.removeFromRight(135).reduced(2, 2));
+    editRightSection.removeFromRight(5); // Gap
+    editMappingsButton.setBounds(editRightSection.removeFromRight(60).reduced(2, 2));
+
+    bounds.removeFromTop(5); // Small gap between Edit button and Target Library
 
     // Target Library at top right - REDUCED SPACING
     auto topBar = bounds.removeFromTop(35);
@@ -773,7 +857,7 @@ void GrooveBrowser::comboBoxChanged(juce::ComboBox* comboBoxThatHasChanged)
 
         // Get the selected text and convert to enum
         juce::String selectedText = targetLibraryCombo.getText();
-        DrumLibrary selectedLibrary = DrumLibraryManager::getLibraryFromName(selectedText);
+        DrumLibrary selectedLibrary = processor.drumLibraryManager.getLibraryFromName(selectedText);
 
         DBG("  Selected text: " + selectedText);
         DBG("  Converted to enum: " + juce::String(static_cast<int>(selectedLibrary)));
@@ -908,7 +992,7 @@ DrumLibrary GrooveBrowser::getCurrentTargetLibrary() const
     }
 
     // Convert the text to enum using the library manager
-    DrumLibrary library = DrumLibraryManager::getLibraryFromName(selectedText);
+    DrumLibrary library = processor.drumLibraryManager.getLibraryFromName(selectedText);
 
     DBG("getCurrentTargetLibrary:");
     DBG("  ComboBox text: " + selectedText);
@@ -1044,7 +1128,13 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
             double numBars = std::ceil(maxTimeInTicks / ticksPerBar);
             double roundedTicks = numBars * ticksPerBar;
 
-            double fileDurationInSeconds = (roundedTicks / ticksPerQuarterNote) * (60.0 / fileBPM);
+            // CRITICAL FIX: Store the rounded ticks in MIDI terms (BPM-independent)
+            // This allows us to recalculate duration when BPM changes
+            currentPlaybackMidiTicks = roundedTicks;
+            currentPlaybackTPQN = ticksPerQuarterNote;
+
+            // Calculate duration at CURRENT headerBPM
+            double fileDurationInSeconds = (roundedTicks / ticksPerQuarterNote) * (60.0 / headerBPM);
 
             // Ensure minimum duration
             fileDurationInSeconds = juce::jmax(0.1, fileDurationInSeconds);
@@ -1070,11 +1160,44 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
             " at " + juce::String(headerBPM, 2) + " BPM" +
             ", ticks: " + juce::String(maxTimeInTicks, 0) +
             ", PPQN: " + juce::String(ticksPerQuarterNote, 0) +
-            ", duration: " + juce::String(fileDurationInSeconds, 3) + "s");
+            ", duration: " + juce::String(fileDurationInSeconds, 3) + "s" +
+            ", rounded ticks: " + juce::String(roundedTicks, 0));
         }
     }
 }
 
+void GrooveBrowser::updateLoopDurationForBPMChange()
+{
+    // Only update if browser playback is active
+    if (!browserPlaybackActive || !currentlyPlayingFile.existsAsFile())
+        return;
+
+    // Only update if we have valid MIDI timing data
+    if (currentPlaybackMidiTicks <= 0.0 || currentPlaybackTPQN <= 0.0)
+        return;
+
+    // Get current header BPM
+    double headerBPM = 120.0;
+    bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
+
+    if (syncToHost)
+    {
+        headerBPM = processor.getHostBPM();
+    }
+    else
+    {
+        headerBPM = processor.parameters.getRawParameterValue("manualBPM")->load();
+    }
+
+    // Recalculate duration using stored MIDI ticks and current BPM
+    double newDurationInSeconds = (currentPlaybackMidiTicks / currentPlaybackTPQN) * (60.0 / headerBPM);
+    newDurationInSeconds = juce::jmax(0.1, newDurationInSeconds);
+
+    // Update loop range with new duration
+    processor.midiProcessor.setLoopRange(0.0, newDurationInSeconds);
+
+    DBG("BPM changed - Loop duration updated: " + juce::String(newDurationInSeconds, 3) + "s at " + juce::String(headerBPM, 2) + " BPM");
+}
 
 void GrooveBrowser::handleColumnDoubleClick(int columnIndex, int row)
 {
@@ -1126,6 +1249,7 @@ void GrooveBrowser::handleMidiFileSelection(const juce::File& midiFile)
 
     // Get the current target library
     DrumLibrary targetLib = getCurrentTargetLibrary();
+
 
     // Dissect the MIDI file with BOTH source and target libraries AND library manager
     currentDrumParts = midiDissector.dissectMidiFileWithLibraryManager(midiFile, sourceLib, targetLib, processor.drumLibraryManager);
@@ -1362,11 +1486,14 @@ void GrooveBrowser::updateColumnsLayout()
     int totalWidth = 0;
     int currentX = 0;
 
+    // Use viewport's height for columns, not GrooveBrowser's height
+    int columnHeight = viewport.getHeight();
+
     // Layout folder columns
     for (auto* column : folderColumns)
     {
         int width = (column == folderColumns.getLast() && !partsColumn) ? FILE_COLUMN_WIDTH : FOLDER_COLUMN_WIDTH;
-        column->setBounds(currentX, 0, width, getHeight() - 35); // Account for top bar
+        column->setBounds(currentX, 0, width, columnHeight);
         currentX += width;
         totalWidth += width;
     }
@@ -1374,11 +1501,11 @@ void GrooveBrowser::updateColumnsLayout()
     // Layout parts column if it exists
     if (partsColumn)
     {
-        partsColumn->setBounds(currentX, 0, PARTS_COLUMN_WIDTH, getHeight() - 35);
+        partsColumn->setBounds(currentX, 0, PARTS_COLUMN_WIDTH, columnHeight);
         totalWidth += PARTS_COLUMN_WIDTH;
     }
 
-    columnsContainer.setBounds(0, 0, totalWidth, getHeight() - 35);
+    columnsContainer.setBounds(0, 0, totalWidth, columnHeight);
 }
 
 void GrooveBrowser::scanFolder(const juce::File& folder, BrowserColumn* column)
@@ -1624,10 +1751,39 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
         return;
     }
 
+    // Get the GrooveBrowser to access target library settings
+    auto* grooveBrowser = findParentComponentOfClass<GrooveBrowser>();
+    if (!grooveBrowser)
+    {
+        juce::AlertWindow::showMessageBoxAsync(juce::AlertWindow::WarningIcon,
+                                               "Export Error", "Cannot access browser settings!", "OK");
+        return;
+    }
+
     // Get current plugin BPM (header BPM)
     bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
     double currentBPM = syncToHost ? processor.getHostBPM()
     : processor.parameters.getRawParameterValue("manualBPM")->load();
+
+    // Determine source library for this file
+    DrumLibrary sourceLib = DrumLibrary::Unknown;
+    for (int i = 0; i < processor.drumLibraryManager.getNumRootFolders(); ++i)
+    {
+        auto rootFolder = processor.drumLibraryManager.getRootFolder(i);
+        if (originalMidiFile.getFullPathName().startsWith(rootFolder.getFullPathName()))
+        {
+            sourceLib = processor.drumLibraryManager.getRootFolderSourceLibrary(i);
+            break;
+        }
+    }
+
+    // Get target library for remapping
+    DrumLibrary targetLib = grooveBrowser->getCurrentTargetLibrary();
+
+    // Determine if note remapping is needed
+    bool needsRemapping = (targetLib != DrumLibrary::Bypass &&
+    sourceLib != DrumLibrary::Unknown &&
+    sourceLib != targetLib);
 
     // Read original MIDI file
     juce::MidiFile originalMidi;
@@ -1679,12 +1835,12 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     }
 
     // Check if BPM adjustment is needed
-    bool needsAdjustment = std::abs(currentBPM - originalBPM) > 0.1;
+    bool needsBPMAdjustment = std::abs(currentBPM - originalBPM) > 0.1;
 
-    if (needsAdjustment)
+    // Export with adjustments if BPM change or remapping is needed
+    if (needsBPMAdjustment || needsRemapping)
     {
-
-        // ÃƒÂ¢Ã…â€œÃ¢â‚¬Â¦ CORRECTED: originalBPM / currentBPM (was backwards!)
+        // Calculate time stretch ratio for BPM adjustment
         double timeStretchRatio = originalBPM / currentBPM;
 
         // Create adjusted MIDI file
@@ -1718,10 +1874,25 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
                 if (message.isTempoMetaEvent())
                     continue;
 
-                // Apply time stretch to event timestamp
+                // Apply time stretch to event timestamp if BPM adjustment is needed
                 double originalTimestamp = message.getTimeStamp();
-                double newTimestamp = originalTimestamp * timeStretchRatio;
+                double newTimestamp = needsBPMAdjustment ? (originalTimestamp * timeStretchRatio) : originalTimestamp;
                 message.setTimeStamp(newTimestamp);
+
+                // Apply note remapping for note on/off events
+                if (needsRemapping && message.isNoteOnOrOff())
+                {
+                    uint8_t originalNote = static_cast<uint8_t>(message.getNoteNumber());
+                    uint8_t remappedNote = processor.drumLibraryManager.mapNoteToLibrary(
+                        originalNote,
+                        sourceLib,
+                        targetLib);
+
+                    if (remappedNote != originalNote)
+                    {
+                        message.setNoteNumber(remappedNote);
+                    }
+                }
 
                 newTrack.addEvent(message, message.getTimeStamp());
             }
@@ -1749,8 +1920,7 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     }
     else
     {
-        // No BPM adjustment needed - just copy the file
-
+        // No BPM adjustment or remapping needed - just copy the file
         bool success = originalMidiFile.copyFileTo(exportFile);
 
         if (!success)
@@ -1767,13 +1937,31 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     // Verify export was successful
     if (exportFile.existsAsFile() && exportFile.getSize() > 0)
     {
-
-        // Show success message with BPM info
+        // Show success message with BPM and remapping info
         juce::String message = "MIDI file exported to Desktop";
-        if (needsAdjustment)
+
+        if (needsBPMAdjustment)
         {
-            message += "\n\nBPM adjusted: " + juce::String(originalBPM, 1) + " ÃƒÂ¢Ã¢â‚¬Â Ã¢â‚¬â„¢ " + juce::String(currentBPM, 1);
+            message += "\n\nBPM adjusted: " + juce::String(originalBPM, 1) + " Ã¢â€ â€™ " + juce::String(currentBPM, 1);
         }
+
+        if (needsRemapping)
+        {
+            message += "\n\nNotes remapped from ";
+            // Get library names for user-friendly display
+            if (sourceLib == DrumLibrary::EZdrummer) message += "EZdrummer";
+            else if (sourceLib == DrumLibrary::SuperiorDrummer3) message += "Superior Drummer";
+            else if (sourceLib == DrumLibrary::GeneralMIDI) message += "General MIDI";
+            else message += "source library";
+
+            message += " to ";
+
+            if (targetLib == DrumLibrary::EZdrummer) message += "EZdrummer";
+            else if (targetLib == DrumLibrary::SuperiorDrummer3) message += "Superior Drummer";
+            else if (targetLib == DrumLibrary::GeneralMIDI) message += "General MIDI";
+            else message += "target library";
+        }
+
         message += "\n\nFile: " + exportFile.getFileName();
 
         // Show success message with option to reveal file
@@ -1802,7 +1990,7 @@ void BrowserColumn::exportFileToDesktop(const juce::File& originalMidiFile)
     }
 }
 
-// NEW: Helper to get the active file column (rightmost column with MIDI files)
+// Helper to get the active file column (rightmost column with MIDI files)
 BrowserColumn* GrooveBrowser::getActiveFileColumn()
 {
     // Find the rightmost column that contains MIDI files (not folders)
@@ -1914,4 +2102,90 @@ void GrooveBrowser::mouseDown(const juce::MouseEvent& e)
     // Grab keyboard focus when user clicks in the GrooveBrowser
     grabKeyboardFocus();
     DBG("GrooveBrowser: Grabbed keyboard focus");
+}
+
+void GrooveBrowser::refreshTargetLibraryCombo()
+{
+    DBG("=== Refreshing Target Library Combo ===");
+
+    // Save current selection
+    juce::String currentSelection = targetLibraryCombo.getText();
+    int currentSelectionId = targetLibraryCombo.getSelectedId();
+
+    DBG("Current selection: " + currentSelection + " (ID: " + juce::String(currentSelectionId) + ")");
+
+    // Clear and rebuild the combo box
+    targetLibraryCombo.clear();
+
+    auto libraryNames = processor.drumLibraryManager.getLoadedLibraryNames();
+    for (int i = 0; i < libraryNames.size(); ++i)
+    {
+        targetLibraryCombo.addItem(libraryNames[i], i + 1);
+    }
+
+    // Try to restore previous selection by name
+    int newIdToSelect = 0;
+    for (int i = 0; i < libraryNames.size(); ++i)
+    {
+        if (libraryNames[i] == currentSelection)
+        {
+            newIdToSelect = i + 1;
+            break;
+        }
+    }
+
+    // If previous selection not found, default to General MIDI
+    if (newIdToSelect == 0)
+    {
+        DBG("Previous selection '" + currentSelection + "' not found, defaulting to General MIDI");
+        newIdToSelect = static_cast<int>(DrumLibrary::GeneralMIDI);
+    }
+
+    // Set the new selection
+    if (newIdToSelect > 0)
+    {
+        targetLibraryCombo.setSelectedId(newIdToSelect, juce::sendNotificationSync);
+        DBG("Restored selection: " + targetLibraryCombo.getText() + " (ID: " + juce::String(newIdToSelect) + ")");
+    }
+
+    DBG("Target library combo refreshed with " + juce::String(libraryNames.size()) + " libraries");
+}
+
+void GrooveBrowser::showSamplesManager()
+{
+    // Check if window already exists and is visible
+    if (samplesManagerWindow != nullptr && samplesManagerWindow->isVisible())
+    {
+        samplesManagerWindow->toFront(true);
+        return;
+    }
+
+    auto* content = new SamplesManagerWindow(
+        processor.getDrumMixer(),
+                                             processor.drumLibraryManager,
+                                             processor
+    );
+
+    // Create a non-modal DocumentWindow
+    samplesManagerWindow = std::make_unique<juce::DocumentWindow>(
+        "Samples Manager",
+        ColourPalette::mainBackground,
+        juce::DocumentWindow::closeButton | juce::DocumentWindow::minimiseButton
+    );
+
+    samplesManagerWindow->setUsingNativeTitleBar(true);
+    samplesManagerWindow->setContentOwned(content, true);
+    samplesManagerWindow->setResizable(true, false);
+    samplesManagerWindow->centreWithSize(1500, 900);
+
+    content->onClose = [this]() {
+        if (samplesManagerWindow != nullptr)
+        {
+            samplesManagerWindow->setVisible(false);
+            samplesManagerWindow.reset();
+        }
+    };
+
+    samplesManagerWindow->setVisible(true);
+    samplesManagerWindow->toFront(true);
 }

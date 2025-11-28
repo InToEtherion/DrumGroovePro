@@ -1,4 +1,5 @@
 #include "AddFolderDialog.h"
+#include "OriginLibraryEditor.h"
 #include "../LookAndFeel/ColourPalette.h"
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 #include "../../PluginProcessor.h"
@@ -8,11 +9,12 @@ AddFolderDialog::AddFolderDialog(DrumGrooveProcessor& p)
       processor(p)
 {
     component = std::make_unique<AddFolderComponent>(processor);
-
+    component->sourceLibraryCombo.addListener(this);
     // Connect button listeners
     component->browseButton.addListener(this);
     component->addButton.addListener(this);
     component->cancelButton.addListener(this);
+    component->editOriginButton.addListener(this);
     component->sourceLibraryCombo.addListener(this);
 
     setContentOwned(component.release(), false);
@@ -78,12 +80,37 @@ void AddFolderDialog::buttonClicked(juce::Button* button)
     {
         if (selectedFolder.exists())
         {
-			auto selectedText = comp->sourceLibraryCombo.getText();
-			auto sourceLib = DrumLibraryManager::getLibraryFromName(selectedText);
+            auto selectedText = comp->sourceLibraryCombo.getText();
+            auto sourceLib = processor.drumLibraryManager.getLibraryFromName(selectedText);
             selectedSourceLibrary = static_cast<int>(sourceLib);
             libraryName = comp->libraryNameEditor.getText();
             startProcessing();
         }
+    }
+    else if (button == &comp->editOriginButton)
+    {
+        // Create callback to refresh the combo when libraries change
+        auto refreshCallback = [this, comp]()
+        {
+            // Refresh the source library combo box
+            int currentSelection = comp->sourceLibraryCombo.getSelectedId();
+            comp->sourceLibraryCombo.clear();
+
+            auto sourceLibNames = processor.drumLibraryManager.getAllSourceLibraryNames();
+            for (int i = 0; i < sourceLibNames.size(); ++i)
+            {
+                comp->sourceLibraryCombo.addItem(sourceLibNames[i], i + 1);
+            }
+
+            // Try to restore selection, or select first item
+            if (currentSelection <= sourceLibNames.size())
+                comp->sourceLibraryCombo.setSelectedId(currentSelection);
+            else
+                comp->sourceLibraryCombo.setSelectedId(1);
+        };
+
+        // FIX: Pass the callback to showEditor so it gets used!
+        OriginLibraryEditor::showEditor(processor.drumLibraryManager, this, refreshCallback);
     }
     else if (button == &comp->cancelButton)
     {
@@ -188,7 +215,24 @@ void AddFolderDialog::finishProcessing()
     comp->progressBar.repaint();
     comp->statusLabel.setText("Finalizing library update...", juce::dontSendNotification);
 
-	processor.drumLibraryManager.addRootFolder(selectedFolder, static_cast<DrumLibrary>(selectedSourceLibrary));
+    // NEW: Check if folder already exists
+    if (processor.drumLibraryManager.isFolderAlreadyAdded(selectedFolder))
+    {
+        setProcessingState(false);
+        comp->statusLabel.setText("", juce::dontSendNotification);
+        
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::WarningIcon,
+            "Folder Already Added",
+            "This folder has already been added to the library.\n\n"
+            "Each folder can only be added once to avoid conflicts.\n\n"
+            "If you need to use files from this folder with a different origin library, "
+            "please remove the existing folder first and add it again with the new origin library.",
+            "OK");
+        return;
+    }
+
+    processor.drumLibraryManager.addRootFolder(selectedFolder, static_cast<DrumLibrary>(selectedSourceLibrary));
 
     comp->statusLabel.setText("Library updated successfully!", juce::dontSendNotification);
 
@@ -257,16 +301,20 @@ AddFolderDialog::AddFolderComponent::AddFolderComponent(DrumGrooveProcessor& p)
     addAndMakeVisible(sourceLibraryLabel);
 
     // Populate with all source libraries (includes Unknown)
-    auto sourceLibNames = DrumLibraryManager::getAllSourceLibraryNames();
+    auto sourceLibNames = processor.drumLibraryManager.getAllSourceLibraryNames();
     for (int i = 0; i < sourceLibNames.size(); ++i)
     {
         sourceLibraryCombo.addItem(sourceLibNames[i], i + 1);
-    }
+    }                           
     sourceLibraryCombo.setSelectedId(1);
     addAndMakeVisible(sourceLibraryCombo);
 
-    sourceHelpLabel.setText("What drum library were these MIDI files created for?",
-                            juce::dontSendNotification);
+    // Edit button for managing origin libraries
+    editOriginButton.setButtonText("Edit");
+    editOriginButton.setTooltip("Manage origin MIDI libraries");
+    addAndMakeVisible(editOriginButton);
+
+    sourceHelpLabel.setText("What drum library were these MIDI files created for?", juce::dontSendNotification);
     sourceHelpLabel.setFont(lnf.getSmallFont());
     sourceHelpLabel.setColour(juce::Label::textColourId, ColourPalette::mutedText);
     addAndMakeVisible(sourceHelpLabel);
@@ -323,10 +371,13 @@ void AddFolderDialog::AddFolderComponent::resized()
 
     bounds.removeFromTop(25);
 
-    sourceLibraryLabel.setBounds(bounds.removeFromTop(25));
-    sourceLibraryCombo.setBounds(bounds.removeFromTop(30));
-    sourceHelpLabel.setBounds(bounds.removeFromTop(20));
 
+    sourceLibraryLabel.setBounds(bounds.removeFromTop(25));
+    auto comboRow = bounds.removeFromTop(30);
+    editOriginButton.setBounds(comboRow.removeFromRight(60).reduced(0, 2));
+    comboRow.removeFromRight(10);
+    sourceLibraryCombo.setBounds(comboRow);
+    sourceHelpLabel.setBounds(bounds.removeFromTop(20));
     bounds.removeFromTop(25);
 
     libraryNameLabel.setBounds(bounds.removeFromTop(25));

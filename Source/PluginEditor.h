@@ -22,12 +22,15 @@ class DrumGrooveEditor : public juce::AudioProcessorEditor,
         // Component visibility override for state persistence
         void setVisible(bool shouldBeVisible) override;
         
-        // CRITICAL FIX: Override focus methods to prevent playback stopping when focus is lost
+        // Override focus methods to prevent playback stopping when focus is lost
         void focusLost(FocusChangeType cause) override;
         void focusGained(FocusChangeType cause) override;
         
-        // CRITICAL FIX: Override visibility to prevent playback stopping when minimized
+        // Override visibility to prevent playback stopping when minimized
         void visibilityChanged() override;
+		
+		MainComponent* getMainComponent() const { return mainComponent.get(); }
+	
 
     private:
         // Core components

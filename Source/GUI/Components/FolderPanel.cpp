@@ -62,12 +62,7 @@ FolderPanel::FolderPanel(DrumGrooveProcessor& p)
 	folderGroupLabel.setJustificationType(juce::Justification::centredLeft);
 	addAndMakeVisible(folderGroupLabel);
     
-    folderCountLabel.setText("0 folder(s) loaded", juce::dontSendNotification);
-    folderCountLabel.setFont(lnf.getSmallFont());
-    folderCountLabel.setColour(juce::Label::textColourId, ColourPalette::mutedText);
-    addAndMakeVisible(folderCountLabel);
-    
-    // CRITICAL FIX: Use setActualModel for delegation pattern
+    // Use setActualModel for delegation pattern
     folderList.setActualModel(this);
     folderList.setRowHeight(24);
     folderList.setColour(juce::ListBox::backgroundColourId, ColourPalette::mainBackground.withAlpha(0.5f));
@@ -286,47 +281,54 @@ void FolderPanel::paint(juce::Graphics& g)
 void FolderPanel::resized()
 {
     auto bounds = getLocalBounds().reduced(10);
-    
+
+    // Buttons at top
     auto buttonArea = bounds.removeFromTop(35);
-    
+
     int totalSpacing = 10;
     int availableWidth = buttonArea.getWidth() - totalSpacing;
     int buttonWidth = availableWidth / 3;
     int buttonSpacing = 5;
-    
+
     addFolderButton.setBounds(buttonArea.removeFromLeft(buttonWidth));
     buttonArea.removeFromLeft(buttonSpacing);
     rescanButton.setBounds(buttonArea.removeFromLeft(buttonWidth));
     buttonArea.removeFromLeft(buttonSpacing);
     aboutButton.setBounds(buttonArea.removeFromLeft(buttonWidth));
-    
+
     bounds.removeFromTop(10);
-    
-    // Rest of the layout
-    auto folderSection = bounds.removeFromTop(200);
+
+    // Calculate equal space for both sections
+    int availableHeight = bounds.getHeight();
+    int sectionHeight = (availableHeight - 10) / 2; // Split equally with 10px gap
+
+    // Library Folders section
+    auto folderSection = bounds.removeFromTop(sectionHeight);
     folderGroupLabel.setBounds(folderSection.removeFromTop(20));
-    
-    auto folderContent = folderSection.reduced(10).withTrimmedTop(15);
-    folderCountLabel.setBounds(folderContent.removeFromTop(18));
-    folderContent.removeFromTop(2);
+
+    // Reduced gap: only 5px top padding instead of 15
+    auto folderContent = folderSection.reduced(5, 0).withTrimmedTop(5);
     folderViewport->setBounds(folderContent);
-       
+
     int numRows = this->getNumRows();
     int rowHeight = folderList.getRowHeight();
     int listHeight = juce::jmax(folderContent.getHeight(), numRows * rowHeight);
     folderList.setBounds(0, 0, folderContent.getWidth(), listHeight);
-    
-    bounds.removeFromTop(10);
-    
-    fileInfoGroupLabel.setBounds(bounds.removeFromTop(20));
-    auto infoContent = bounds.reduced(10).withTrimmedTop(15);
-    
-    favoritesViewport->setBounds(infoContent);
-       
+
+    bounds.removeFromTop(10); // Gap between sections
+
+    // Favorites section
+    auto favoritesSection = bounds; // Use all remaining space
+    fileInfoGroupLabel.setBounds(favoritesSection.removeFromTop(20));
+
+    // Reduced gap: only 5px top padding instead of 15
+    auto favContent = favoritesSection.reduced(5, 0).withTrimmedTop(5);
+    favoritesViewport->setBounds(favContent);
+
     int numFavorites = favoritesModel->getNumRows();
     int favRowHeight = favoritesList.getRowHeight();
-    int favListHeight = juce::jmax(infoContent.getHeight(), numFavorites * favRowHeight);
-    favoritesList.setBounds(0, 0, infoContent.getWidth(), favListHeight);
+    int favListHeight = juce::jmax(favContent.getHeight(), numFavorites * favRowHeight);
+    favoritesList.setBounds(0, 0, favContent.getWidth(), favListHeight);
 }
 
 void FolderPanel::buttonClicked(juce::Button* button)
@@ -472,8 +474,6 @@ void FolderPanel::refreshFolderList()
         folderNames.add(library.getRootFolderName(i));
     }
     
-    folderCountLabel.setText(juce::String(folderNames.size()) + " folder(s) loaded",
-                             juce::dontSendNotification);
     folderList.updateContent();
     folderList.repaint();
 }
