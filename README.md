@@ -4,7 +4,7 @@
 
 ![DrumGroovePro Interface](images/plugin-interface.png)
 
-![DrumGroovePro Sampler](images/sample.png)
+![DrumGroovePro Sampler](images/sampler.png)
 ---
 
 ##  Overview
