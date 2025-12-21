@@ -4,12 +4,15 @@
 #include "DrumLibraryManager.h"
 #include "ColourPalette.h"
 
+// Forward declaration
+class DrumGrooveProcessor;
+
 class DrumLibraryMappingEditor : public juce::Component,
 public juce::ListBoxModel,
     public juce::Button::Listener
     {
     public:
-        DrumLibraryMappingEditor(DrumLibraryManager& manager);
+        DrumLibraryMappingEditor(DrumLibraryManager& manager, DrumGrooveProcessor* processor = nullptr);
         ~DrumLibraryMappingEditor() override;
 
         void paint(juce::Graphics& g) override;
@@ -24,11 +27,12 @@ public juce::ListBoxModel,
         void buttonClicked(juce::Button* button) override;
 
         // Show the editor as a modal dialog
-        static void showEditor(DrumLibraryManager& manager, juce::Component* parent,
+        static void showEditor(DrumLibraryManager& manager, DrumGrooveProcessor* processor, juce::Component* parent,
                                std::function<void()> onLibrariesChangedCallback = nullptr);
 
     private:
         DrumLibraryManager& drumLibraryManager;
+        DrumGrooveProcessor* processor;
 
         juce::Image arrowIcon;
         juce::Image crossIcon;
@@ -117,9 +121,11 @@ public juce::ListBoxModel,
             juce::Label targetNoteLabel;
             juce::DrawableButton deleteButton;
             juce::TextButton editButton;
+            juce::TextButton playButton;
 
             std::function<void()> onDelete;
             std::function<void()> onEdit;
+            std::function<void()> onPlay;
 
             uint8_t getGMNote() const { return gmNote; }
             uint8_t getTargetNote() const { return targetNote; }

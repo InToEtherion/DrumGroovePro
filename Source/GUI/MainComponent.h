@@ -22,6 +22,8 @@ public:
     void paint(juce::Graphics& g) override;
     void resized() override;
 
+    void mouseDown(const juce::MouseEvent& e) override;
+
     void updateBPMDisplay();
     FolderPanel* getFolderPanel() const { return folderPanel.get(); }
     MultiTrackContainer* getMultiTrackContainer() { return multiTrackContainer.get(); }

@@ -39,7 +39,16 @@ void MidiProcessor::processBlock(juce::MidiBuffer& midiMessages, double bpm, Dru
 {
     // THREAD-SAFE: Read atomic playing flag once at start
     if (!playing.load())
+    {
+        // Add preview notes even when not playing
+        const juce::ScopedLock sl(previewLock);
+        if (!previewNoteBuffer.isEmpty())
+        {
+            midiMessages.addEvents(previewNoteBuffer, 0, -1, 0);
+            previewNoteBuffer.clear();
+        }
         return;
+    }
 
     currentBPM = bpm;
 
@@ -140,6 +149,16 @@ void MidiProcessor::processBlock(juce::MidiBuffer& midiMessages, double bpm, Dru
         double finalPosition = (overrunToProcess > 0.0) ? (loopStart + overrunToProcess) : loopStart;
         playheadPosition.store(finalPosition);
     }
+
+    // Add preview notes
+    {
+        const juce::ScopedLock sl(previewLock);
+        if (!previewNoteBuffer.isEmpty())
+        {
+            midiMessages.addEvents(previewNoteBuffer, 0, -1, 0);
+            previewNoteBuffer.clear();
+        }
+    }
 }
 
 void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib,
@@ -185,8 +204,16 @@ void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLi
 void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLibrary sourceLib,
                                 double referenceBPM, double targetBPM, int trackNum, double explicitDuration, const juce::String& clipId)
 {
+    DBG("=== addMidiClip called ===");
+    DBG("File: " + file.getFullPathName());
+    DBG("File exists: " + juce::String(file.existsAsFile() ? "YES" : "NO"));
+    DBG("File size: " + juce::String(file.getSize()) + " bytes");
+
     if (!file.existsAsFile())
+    {
+        DBG("ERROR: File does not exist!");
         return;
+    }
 
     // ============================================================================
     // OPTIMIZATION: File I/O and MIDI parsing done OUTSIDE critical section
@@ -201,15 +228,26 @@ void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLi
     clip->trackNumber = trackNum;
     clip->unscaledLocalTime = 0.0;
 
+    DBG("Calling loadMidiFileWithPrecision...");
+
     // Load and parse MIDI file - potentially slow, done OUTSIDE lock
     if (!loadMidiFileWithPrecision(file, *clip))
+    {
+        DBG("ERROR: loadMidiFileWithPrecision FAILED!");
         return;
+    }
+
+    DBG("loadMidiFileWithPrecision SUCCESS - Events: " + juce::String(clip->sequence.getNumEvents()));
 
     if (clip->sequence.getNumEvents() == 0)
+    {
+        DBG("ERROR: Clip has NO events after loading!");
         return;
+    }
 
     clip->duration = explicitDuration;
 
+    DBG("MidiProcessor: Clip loaded successfully - " + juce::String(clip->sequence.getNumEvents()) + " events");
     DBG("MidiProcessor: Added clip with explicit duration: " + juce::String(explicitDuration, 3) +
     "s, referenceBPM: " + juce::String(referenceBPM, 2) + ", targetBPM: " + juce::String(targetBPM, 2) +
     ", ID: " + clipId);
@@ -224,6 +262,8 @@ void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLi
     double currentPosition = playheadPosition.load();
     seekClipToTime(*clip, currentPosition);
     activeClips.push_back(std::move(clip));
+
+    DBG("Clip added to activeClips vector. Total clips: " + juce::String(activeClips.size()));
 }
 
 
@@ -316,15 +356,30 @@ void MidiProcessor::clearClip(const juce::String& clipId)
 
 bool MidiProcessor::loadMidiFileWithPrecision(const juce::File& file, MidiClipPlayback& clip)
 {
+    DBG("loadMidiFileWithPrecision: Starting - File: " + file.getFullPathName());
+    DBG("  File size: " + juce::String(file.getSize()) + " bytes");
+
     juce::FileInputStream fileStream(file);
     if (!fileStream.openedOk())
+    {
+        DBG("ERROR: FileInputStream failed to open!");
         return false;
+    }
+
+    DBG("  FileInputStream opened OK");
 
     juce::MidiFile midiFile;
     if (!midiFile.readFrom(fileStream))
+    {
+        DBG("ERROR: MidiFile.readFrom() failed!");
         return false;
+    }
+
+    DBG("  MidiFile.readFrom() SUCCESS");
 
     double ticksPerQuarterNote = midiFile.getTimeFormat();
+    DBG("  TPQN: " + juce::String(ticksPerQuarterNote));
+
     if (ticksPerQuarterNote <= 0)
         ticksPerQuarterNote = 480.0;
 
@@ -332,6 +387,8 @@ bool MidiProcessor::loadMidiFileWithPrecision(const juce::File& file, MidiClipPl
     double currentTempo = 120.0;
 
     int numTracks = midiFile.getNumTracks();
+    DBG("  Number of tracks: " + juce::String(numTracks));
+
     juce::Array<juce::MidiMessageSequence::MidiEventHolder*> allEvents;
 
     for (int t = 0; t < numTracks; ++t)
@@ -339,6 +396,8 @@ bool MidiProcessor::loadMidiFileWithPrecision(const juce::File& file, MidiClipPl
         const juce::MidiMessageSequence* track = midiFile.getTrack(t);
         if (track)
         {
+            DBG("  Track " + juce::String(t) + " has " + juce::String(track->getNumEvents()) + " events");
+
             for (int i = 0; i < track->getNumEvents(); ++i)
             {
                 juce::MidiMessageSequence::MidiEventHolder* event = track->getEventPointer(i);
@@ -351,6 +410,8 @@ bool MidiProcessor::loadMidiFileWithPrecision(const juce::File& file, MidiClipPl
             }
         }
     }
+
+    DBG("  Total events collected: " + juce::String(allEvents.size()));
 
     // Sort events by timestamp using JUCE-compatible comparator
     struct EventComparator
@@ -369,6 +430,7 @@ bool MidiProcessor::loadMidiFileWithPrecision(const juce::File& file, MidiClipPl
     EventComparator comparator;
     allEvents.sort(comparator);
 
+    int noteCount = 0;
     for (auto* eventHolder : allEvents)
     {
         if (eventHolder->message.isNoteOn() || eventHolder->message.isNoteOff() ||
@@ -382,6 +444,7 @@ bool MidiProcessor::loadMidiFileWithPrecision(const juce::File& file, MidiClipPl
             if (timedEvent.isNoteOn() && timedEvent.getVelocity() > 0)
             {
                 clip.sequence.addEvent(timedEvent);
+                noteCount++;
             }
             else if (timedEvent.isNoteOff() || (timedEvent.isNoteOn() && timedEvent.getVelocity() == 0))
             {
@@ -394,19 +457,26 @@ bool MidiProcessor::loadMidiFileWithPrecision(const juce::File& file, MidiClipPl
         }
     }
 
+    DBG("  Note-on events added: " + juce::String(noteCount));
+
     clip.sequence.sort();
     clip.sequence.updateMatchedPairs();
+
+    DBG("  Final sequence events: " + juce::String(clip.sequence.getNumEvents()));
 
     if (clip.sequence.getNumEvents() > 0)
     {
         double lastEventTime = clip.sequence.getEndTime();
         clip.duration = lastEventTime + 0.1;
+        DBG("  Duration: " + juce::String(clip.duration, 3) + "s");
     }
     else
     {
         clip.duration = 1.0;
+        DBG("  WARNING: No events, using default duration");
     }
 
+    DBG("loadMidiFileWithPrecision: SUCCESS");
     return true;
 }
 
@@ -418,7 +488,7 @@ void MidiProcessor::processClipWithSampleAccuracy(MidiClipPlayback& clip, juce::
     double scaledDuration = clip.duration * visualScaleFactor;
     double clipEndTime = clip.startTime + scaledDuration;
 
-    constexpr double EPSILON = 0.0001; // 0.1ms tolerance
+    constexpr double EPSILON = 0.001; // 1ms tolerance
 
     // If playhead is completely before or after the clip, deactivate
     if (blockStartTime >= (clipEndTime + EPSILON) || blockEndTime <= (clip.startTime - EPSILON))
@@ -529,10 +599,23 @@ void MidiProcessor::processClipWithSampleAccuracy(MidiClipPlayback& clip, juce::
         }
 
         // Skip events that are before this block's start time (with tolerance)
+        // BUT ONLY if the event would have a NEGATIVE sample offset
         if (originalEventTime < unscaledLocalStartWithTolerance)
         {
-            clip.currentEventIndex++;
-            continue;
+            // CRITICAL FIX: Check if this note would actually have a valid sample offset
+            // before skipping it. At high BPM, notes can cluster together.
+            double scaledEventTime = originalEventTime * visualScaleFactor;
+            double absoluteEventTime = clip.startTime + scaledEventTime;
+            double relativeTime = absoluteEventTime - blockStartTime;
+            int testOffset = static_cast<int>(std::lround(relativeTime * sampleRate));
+
+            // Only skip if the sample offset is truly negative (before this block)
+            if (testOffset < 0)
+            {
+                clip.currentEventIndex++;
+                continue;
+            }
+            // Otherwise, fall through and process this event
         }
 
         // Stop if event is after this block
@@ -701,9 +784,11 @@ void MidiProcessor::play()
     // Read current playhead position atomically
     double currentPosition = playheadPosition.load();
 
-    for (auto& clip : activeClips)
+    DBG("MidiProcessor::play() - Active clips: " + juce::String(activeClips.size()));
+    for (const auto& clip : activeClips)
     {
         seekClipToTime(*clip, currentPosition);
+        DBG("  Clip " + clip->id + ": " + juce::String(clip->sequence.getNumEvents()) + " events, startTime=" + juce::String(clip->startTime, 3) + "s");
     }
 }
 
@@ -739,4 +824,13 @@ void MidiProcessor::setPlayheadPosition(double timeInSeconds)
     {
         seekClipToTime(*clip, clampedTime);
     }
+}
+
+void MidiProcessor::addPreviewNote(const juce::MidiMessage& noteOn, const juce::MidiMessage& noteOff)
+{
+    const juce::ScopedLock sl(previewLock);
+
+    previewNoteBuffer.clear();
+    previewNoteBuffer.addEvent(noteOn, 0);
+    previewNoteBuffer.addEvent(noteOff, static_cast<int>(sampleRate * 0.1)); // 100ms duration
 }

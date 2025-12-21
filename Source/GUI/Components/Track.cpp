@@ -6,6 +6,7 @@
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 #include "../LookAndFeel/ColourPalette.h"
 #include "GrooveBrowser.h"
+#include "../../PluginEditor.h"
 
 
 // ===== UNDO/REDO COMMAND CLASSES =====
@@ -75,24 +76,14 @@ private:
 class TrackMoveClipsCommand : public TrackCommand
 {
 public:
-    TrackMoveClipsCommand(Track* t, const std::vector<std::pair<juce::String, double>>& moves)
-    : track(t), clipMoves(moves) 
-    {
-        // CRITICAL FIX: Save old positions in constructor, not in execute()
-        // This ensures undo works even when executeNow = false
-        for (const auto& [id, newTime] : clipMoves) {
-            for (auto& clip : track->clips) {
-                if (clip->id == id) {
-                    oldPositions.push_back({id, clip->startTime});
-                    break;
-                }
-            }
-        }
-    }
+    TrackMoveClipsCommand(Track* t,
+                          const std::vector<std::pair<juce::String, double>>& oldPos,
+                          const std::vector<std::pair<juce::String, double>>& newPos)
+    : track(t), oldPositions(oldPos), newPositions(newPos) {}
 
     void execute() override {
         // Apply new positions
-        for (const auto& [id, newTime] : clipMoves) {
+        for (const auto& [id, newTime] : newPositions) {
             for (auto& clip : track->clips) {
                 if (clip->id == id) {
                     clip->startTime = newTime;
@@ -120,8 +111,8 @@ public:
 
 private:
     Track* track;
-    std::vector<std::pair<juce::String, double>> clipMoves;  // New positions
-    std::vector<std::pair<juce::String, double>> oldPositions; // Old positions for undo
+    std::vector<std::pair<juce::String, double>> oldPositions;
+    std::vector<std::pair<juce::String, double>> newPositions;
 };
 
 class TrackResizeClipCommand : public TrackCommand
@@ -1435,7 +1426,8 @@ void Track::mouseUp(const juce::MouseEvent& e)
         }
 
         // Check if any clips actually moved
-        std::vector<std::pair<juce::String, double>> finalPositions;
+        std::vector<std::pair<juce::String, double>> oldPositions;
+        std::vector<std::pair<juce::String, double>> newPositions;
         bool moved = false;
 
         for (const auto& clip : clips)
@@ -1446,7 +1438,8 @@ void Track::mouseUp(const juce::MouseEvent& e)
                 {
                     if (id == clip->id && std::abs(clip->startTime - originalTime) > 0.001)
                     {
-                        finalPositions.push_back({id, clip->startTime});
+                        oldPositions.push_back({id, originalTime});  // Save ORIGINAL position
+                        newPositions.push_back({id, clip->startTime});  // Save NEW position
                         moved = true;
                         break;
                     }
@@ -1456,7 +1449,7 @@ void Track::mouseUp(const juce::MouseEvent& e)
 
         if (moved)
         {
-            addUndoCommand(std::make_unique<TrackMoveClipsCommand>(this, finalPositions), false);  // Don't execute - already applied
+            addUndoCommand(std::make_unique<TrackMoveClipsCommand>(this, oldPositions, newPositions), false);
         }
 
         isDragging = false;
@@ -1496,6 +1489,22 @@ void Track::mouseUp(const juce::MouseEvent& e)
     selectionBox = juce::Rectangle<float>();
     setMouseCursor(juce::MouseCursor::NormalCursor);
     repaint();
+}
+
+void Track::mouseDoubleClick(const juce::MouseEvent& event)
+{
+    // Check if double-clicked on a MIDI clip
+    auto* clip = getClipAt(event.position);
+
+    if (clip && clip->file.existsAsFile())
+    {
+        // Open MIDI editor
+        auto* editor = findParentComponentOfClass<DrumGrooveEditor>();
+        if (editor)
+        {
+            editor->openMidiEditor(clip->file, clip->sourceLibrary);
+        }
+    }
 }
 
 void Track::mouseMove(const juce::MouseEvent& e)
@@ -1550,14 +1559,102 @@ void Track::itemDragEnter(const SourceDetails& details)
 
     double baseDuration = 4.0;
     double fileBPM = 120.0;
+    juce::File midiFile;
 
+    // ====================================================================
+    // FIX: Handle dissected parts correctly
+    // ====================================================================
     if (parts.size() >= 2 && parts[1] == "PART")
     {
-        baseDuration = 1.0;
+        // This is a dissected drum part
+        // Format: partName|PART|originalFilePath|partType|sourceLibrary
+
+        if (parts.size() >= 3)
+        {
+            juce::File originalFile(parts[2]);
+
+            if (originalFile.existsAsFile())
+            {
+                // Get the original file's BPM
+                fileBPM = getBPMFromMidiFile(originalFile);
+
+                // CRITICAL: We need to create the temp MIDI file to get accurate duration
+                // But we can't do that here without the part type info
+                // So we'll use a reasonable estimate based on typical drum part lengths
+
+                // Read the part type to estimate duration
+                if (parts.size() >= 4)
+                {
+                    int partTypeInt = parts[3].getIntValue();
+                    DrumPartType partType = static_cast<DrumPartType>(partTypeInt);
+
+                    // Estimate duration based on part type
+                    // Most drum parts are 1-4 bars at the original BPM
+                    baseDuration = 2.0; // Default 2 bars worth at 120 BPM
+
+                    // Calculate more accurate duration by reading the original file
+                    juce::FileInputStream inputStream(originalFile);
+                    if (inputStream.openedOk())
+                    {
+                        juce::MidiFile originalMidi;
+                        if (originalMidi.readFrom(inputStream))
+                        {
+                            double ticksPerQuarterNote = originalMidi.getTimeFormat();
+                            if (ticksPerQuarterNote <= 0)
+                                ticksPerQuarterNote = 480.0;
+
+                            // Find max time for this part type
+                            double maxTimeInTicks = 0;
+                            for (int t = 0; t < originalMidi.getNumTracks(); ++t)
+                            {
+                                auto* track = const_cast<juce::MidiMessageSequence*>(originalMidi.getTrack(t));
+                                if (!track) continue;
+
+                                for (int e = 0; e < track->getNumEvents(); ++e)
+                                {
+                                    const auto* event = track->getEventPointer(e);
+                                    if (!event || !event->message.isNoteOn()) continue;
+
+                                    // Check if this note belongs to the part type
+                                    int noteNumber = event->message.getNoteNumber();
+                                    DrumLibrary sourceLib = DrumLibrary::GeneralMIDI;
+                                    if (parts.size() >= 5)
+                                    {
+                                        sourceLib = static_cast<DrumLibrary>(parts[4].getIntValue());
+                                    }
+
+                                    DrumPartType notePartType = MidiDissector::getPartTypeFromNote(noteNumber, sourceLib);
+                                    if (notePartType == partType)
+                                    {
+                                        double eventTime = event->message.getTimeStamp();
+                                        maxTimeInTicks = juce::jmax(maxTimeInTicks, eventTime);
+                                    }
+                                }
+                            }
+
+                            if (maxTimeInTicks > 0)
+                            {
+                                // Round up to complete bars
+                                double ticksPerBar = ticksPerQuarterNote * 4.0; // Assume 4/4
+                                double numBars = std::ceil(maxTimeInTicks / ticksPerBar);
+                                double roundedTicks = numBars * ticksPerBar;
+
+                                // Calculate duration at file's BPM
+                                baseDuration = (roundedTicks / ticksPerQuarterNote) * (60.0 / fileBPM);
+                            }
+                        }
+                    }
+                }
+
+                DBG("Ghost MIDI for drum part - Duration: " + juce::String(baseDuration, 3) +
+                "s at " + juce::String(fileBPM, 2) + " BPM");
+            }
+        }
     }
     else if (parts.size() >= 2)
     {
-        juce::File midiFile(parts[1]);
+        // Regular MIDI file
+        midiFile = juce::File(parts[1]);
         if (midiFile.existsAsFile())
         {
             if (!calculateMidiFileDuration(midiFile, baseDuration))
@@ -1573,9 +1670,7 @@ void Track::itemDragEnter(const SourceDetails& details)
     ghostClip->referenceBPM = fileBPM;
     ghostClip->duration = baseDuration;
 
-    // Don't adjust duration - it's correct as-is
-    // The visual scaling is handled in drawing code
-
+    // The visual scaling will be applied in drawing code based on track BPM
     ghostClip->colour = ColourPalette::primaryBlue.withAlpha(0.3f);
 
     DBG("Ghost clip entered track " + juce::String(trackNumber) +
@@ -2215,30 +2310,27 @@ bool Track::keyPressed(const juce::KeyPress& key, juce::Component*)
         return true;
     }
 
-    // Handle Ctrl+A or Cmd+A (Select All)
-    if ((key.getModifiers().isCommandDown() || key.getModifiers().isCtrlDown()) &&
-        (key.getKeyCode() == 'A' || key.getKeyCode() == 'a'))
+    // Ctrl+A = Select All
+    if (key.getKeyCode() == 'a' && key.getModifiers().isCtrlDown())
     {
         selectAll();
         return true;
     }
 
-    // CRITICAL FIX: Forward undo/redo to MultiTrackContainer
-    // Ctrl+Z = Undo
-    if (key.isKeyCode('Z') && key.getModifiers().isCtrlDown() && !key.getModifiers().isShiftDown())
+    // Ctrl+Z = Undo - forward to container
+    if (key.getKeyCode() == 'z' && key.getModifiers().isCtrlDown() && !key.getModifiers().isShiftDown())
     {
         container.undo();
         return true;
     }
 
-    // Ctrl+Y or Ctrl+Shift+Z = Redo
-    if ((key.isKeyCode('Y') && key.getModifiers().isCtrlDown()) ||
-        (key.isKeyCode('Z') && key.getModifiers().isCtrlDown() && key.getModifiers().isShiftDown()))
+    // Ctrl+Y or Ctrl+Shift+Z = Redo - forward to container
+    if ((key.getKeyCode() == 'y' && key.getModifiers().isCtrlDown()) ||
+        (key.getKeyCode() == 'z' && key.getModifiers().isCtrlDown() && key.getModifiers().isShiftDown()))
     {
         container.redo();
         return true;
     }
 
-    // Let other keys pass through to MultiTrackContainer
     return false;
 }

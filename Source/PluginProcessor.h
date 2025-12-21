@@ -76,6 +76,9 @@ public juce::ValueTree::Listener,
         bool loadDrumSamples();
         juce::String getSamplesStatus() const { return sampleEngine.getStatusText(); }
 
+        // Trigger a preview note (will be routed through normal audio/MIDI path)
+        void triggerPreviewNote(int midiNoteNumber, int velocity = 100);
+
         // Get current effective BPM (either host or manual based on syncToHost)
         double getCurrentEffectiveBPM() const
         {
@@ -231,9 +234,17 @@ public juce::ValueTree::Listener,
                                       juce::ValueTree& getGuiStateTree() { return guiStateTree; }
                                       const juce::ValueTree& getGuiStateTree() const { return guiStateTree; }
 
+        // Browser state persistence
+        void saveBrowserState(const juce::File& currentFolder,
+                              const juce::Array<juce::File>& navPath,
+                              const juce::File& selectedFile);
+        void restoreBrowserState(juce::File& currentFolder,
+                                 juce::Array<juce::File>& navPath,
+                                 juce::File& selectedFile) const;
+
     private:
         static juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
-
+        std::atomic<bool> isBeingDeleted{false};
         void parameterChanged(const juce::String& parameterID, float newValue) override;
 
         // Global settings persistence (persists across sessions, not just DAW projects)
@@ -257,6 +268,8 @@ public juce::ValueTree::Listener,
         std::vector<AudioTrack*> registeredAudioTracks;
         juce::AudioBuffer<float> audioTrackBuffer;
         double currentSampleRate { 44100.0 };
+
+        juce::MidiBuffer previewMidiBuffer;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DrumGrooveProcessor)
     };

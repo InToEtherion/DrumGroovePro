@@ -2,7 +2,7 @@
 #include "../LookAndFeel/ColourPalette.h"
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 
-#define CURRENT_VERSION "0.9.9"
+#define CURRENT_VERSION "1.0.0RC1"
 #define GITHUB_RELEASES_API "https://api.github.com/repos/InToEtherion/DrumGroovePro/releases"
 
 // Semantic version comparison

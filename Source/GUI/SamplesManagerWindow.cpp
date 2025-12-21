@@ -467,9 +467,10 @@ downloadProgress(currentProgress)
     setupMasterEQSection();
     setupPresetSection();
     setupDownloadSection();
+    refreshLibraryList();
+    updateSamplesStatus();
     setupHumanizationSection();
 
-    refreshLibraryList();
     refreshPresetList();
     updateSamplesStatus();
     updateFromMixer();
@@ -566,14 +567,17 @@ void SamplesManagerWindow::resized()
     libRow.removeFromLeft(4);
     deleteButton.setBounds(libRow.removeFromLeft(60));
 
+    // Download section appears below buttons
     if (downloadSectionVisible)
     {
         libContent.removeFromTop(6);
-        downloadSection.setBounds(libContent);
-        auto dlArea = libContent.reduced(2);
-        downloadStatusLabel.setBounds(dlArea.removeFromTop(16));
-        downloadProgress.setBounds(dlArea.removeFromTop(16));
-        cancelDownloadButton.setBounds(dlArea.removeFromTop(20).removeFromRight(75));
+        auto downloadArea = libContent.removeFromTop(60);  // Allocate 60px height for download section
+        downloadSection.setBounds(downloadArea);
+        auto dlArea = downloadArea.reduced(2);
+        downloadStatusLabel.setBounds(dlArea.removeFromTop(18));
+        downloadProgress.setBounds(dlArea.removeFromTop(20));
+        dlArea.removeFromTop(2);
+        cancelDownloadButton.setBounds(dlArea.removeFromTop(18).removeFromRight(75));
     }
 
     topRow.removeFromLeft(6);
@@ -741,8 +745,12 @@ void SamplesManagerWindow::setupLibrarySection()
 
     libraryCombo.setColour(juce::ComboBox::backgroundColourId, ColourPalette::inputBackground);
     libraryCombo.setColour(juce::ComboBox::textColourId, ColourPalette::primaryText);
-    libraryCombo.onChange = [this]() { handleLibraryChange(); };
+    // DON'T set onChange - samples should only load when clicking "Load Samples" button
+    // libraryCombo.onChange = [this]() { handleLibraryChange(); };
     addAndMakeVisible(libraryCombo);
+
+    // NOW populate library list after setup is complete
+    refreshLibraryList();
 
     // Download library selector - populated from SampleDownloader::getAvailableLibraries()
     downloadLibLabel.setText("Get:", juce::dontSendNotification);
@@ -754,12 +762,13 @@ void SamplesManagerWindow::setupLibrarySection()
     downloadLibCombo.setColour(juce::ComboBox::backgroundColourId, ColourPalette::inputBackground);
     downloadLibCombo.setColour(juce::ComboBox::textColourId, ColourPalette::primaryText);
 
-    // Populate with available libraries from SampleDownloader
+    // Populate with available libraries from SampleDownloader (with file sizes)
     auto availableLibs = SampleDownloader::getAvailableLibraries();
     int itemId = 1;
     for (const auto& lib : availableLibs)
     {
-        downloadLibCombo.addItem(lib.name, itemId++);
+        juce::String displayName = lib.name + " (" + juce::String(lib.expectedSizeMB) + " MB)";
+        downloadLibCombo.addItem(displayName, itemId++);
     }
     if (downloadLibCombo.getNumItems() > 0)
         downloadLibCombo.setSelectedId(1, juce::dontSendNotification);
@@ -978,15 +987,18 @@ void SamplesManagerWindow::setupPresetSection()
 
 void SamplesManagerWindow::setupDownloadSection()
 {
+    downloadSection.setOpaque(false);
     addChildComponent(downloadSection);
 
     downloadStatusLabel.setText("Ready", juce::dontSendNotification);
-    downloadStatusLabel.setFont(juce::Font(9.0f));
-    downloadStatusLabel.setColour(juce::Label::textColourId, ColourPalette::secondaryText);
+    downloadStatusLabel.setFont(juce::Font(11.0f));  // Changed from 9.0f to 11.0f - more visible
+    downloadStatusLabel.setColour(juce::Label::textColourId, ColourPalette::primaryText);  // Changed from secondaryText
+    downloadStatusLabel.setJustificationType(juce::Justification::centredLeft);  // ADD THIS
     downloadSection.addAndMakeVisible(downloadStatusLabel);
 
     downloadProgress.setColour(juce::ProgressBar::backgroundColourId, ColourPalette::inputBackground);
     downloadProgress.setColour(juce::ProgressBar::foregroundColourId, ColourPalette::successGreen);
+    downloadProgress.setTextToDisplay("0%");  // ADD THIS - shows percentage
     downloadSection.addAndMakeVisible(downloadProgress);
 
     cancelDownloadButton.setButtonText("Cancel");
@@ -1000,6 +1012,13 @@ void SamplesManagerWindow::showDownloadSection(bool show)
 {
     downloadSectionVisible = show;
     downloadSection.setVisible(show);
+
+    if (show)
+    {
+        downloadSection.repaint();
+        repaint();
+    }
+
     resized();
 }
 
@@ -1086,10 +1105,25 @@ void SamplesManagerWindow::refreshLibraryList()
         juce::File sfzFile = dir.getChildFile("ALL.sfz");
         bool hasSFZ = sfzFile.existsAsFile();
 
-        // Check for DrumGizmo format (has KitName.xml and Midimap.xml)
-        juce::File kitXml = dir.getChildFile(libName + ".xml");
+        // Check for DrumGizmo format (has Midimap.xml and at least one kit .xml)
         juce::File midimapXml = dir.getChildFile("Midimap.xml");
-        bool hasDrumGizmo = kitXml.existsAsFile() && midimapXml.existsAsFile();
+        bool hasMidimap = midimapXml.existsAsFile();
+
+        bool hasDrumGizmo = false;
+        if (hasMidimap)
+        {
+            // Look for any .xml file that's not Midimap.xml (that's the kit XML)
+            juce::Array<juce::File> xmlFiles;
+            dir.findChildFiles(xmlFiles, juce::File::findFiles, false, "*.xml");
+            for (const auto& xmlFile : xmlFiles)
+            {
+                if (xmlFile.getFileName() != "Midimap.xml")
+                {
+                    hasDrumGizmo = true;
+                    break;
+                }
+            }
+        }
 
         if ((hasSFZ || hasDrumGizmo) && !addedLibraries.contains(libName))
         {
@@ -1130,13 +1164,16 @@ void SamplesManagerWindow::handleLibraryChange()
 
 void SamplesManagerWindow::handleDownloadClick()
 {
-    // Get selected library from download combo
-    juce::String selectedLibName = downloadLibCombo.getText();
-    if (selectedLibName.isEmpty())
+    // Get selected library from download combo (format: "Name (XXX MB)")
+    juce::String selectedLibDisplay = downloadLibCombo.getText();
+    if (selectedLibDisplay.isEmpty())
     {
         samplesStatusLabel.setText("Please select a library to download", juce::dontSendNotification);
         return;
     }
+
+    // Extract library name by removing the size suffix
+    juce::String selectedLibName = selectedLibDisplay.upToFirstOccurrenceOf(" (", false, false);
 
     // Find the library info
     auto availableLibs = SampleDownloader::getAvailableLibraries();
@@ -1218,6 +1255,14 @@ void SamplesManagerWindow::onDownloadProgress(double progress, juce::String stat
 {
     currentProgress = progress;
     downloadStatusLabel.setText(status, juce::dontSendNotification);
+
+    // Update progress bar text to show percentage
+    int percentage = static_cast<int>(progress * 100);
+    downloadProgress.setTextToDisplay(juce::String(percentage) + "%");
+
+    downloadProgress.repaint();
+    downloadSection.repaint();
+    repaint();
 }
 
 void SamplesManagerWindow::onDownloadComplete(bool success, juce::String message)

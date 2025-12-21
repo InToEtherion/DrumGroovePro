@@ -2,6 +2,7 @@
 #include "GUI/LookAndFeel/DrumGrooveLookAndFeel.h"
 #include "GUI/LookAndFeel/ColourPalette.h"
 #include "GUI/Components/MultiTrackContainer.h"
+#include "MidiEditorComponent.h"
 
 DrumGrooveEditor::DrumGrooveEditor(DrumGrooveProcessor& p)
 : AudioProcessorEditor(&p), processor(p)
@@ -84,7 +85,7 @@ DrumGrooveEditor::DrumGrooveEditor(DrumGrooveProcessor& p)
         {
             // Restore the visual state (clips, BPMs, positions)
             container->restoreGuiState(stateTree);
-            
+
             // Force repaint to show restored content
             safeThis->repaint();
             if (safeThis->mainComponent)
@@ -95,6 +96,9 @@ DrumGrooveEditor::DrumGrooveEditor(DrumGrooveProcessor& p)
             // If restoration fails, just start fresh
             DBG("State restoration failed - starting with empty timeline");
         }
+
+        // Restore browser navigation state
+        safeThis->restoreGuiState();
     });
 }
 
@@ -203,12 +207,26 @@ void DrumGrooveEditor::saveGuiState()
     if (mainComponent)
     {
         currentEditorState.guiState = mainComponent->saveGuiState();
+
+        // CRITICAL: Save browser state to processor so it persists
+        processor.saveBrowserState(
+            currentEditorState.guiState.currentBrowserFolder,
+            currentEditorState.guiState.browserNavigationPath,
+            currentEditorState.guiState.selectedFile
+        );
     }
 }
 
 void DrumGrooveEditor::restoreGuiState()
 {
-    if (mainComponent && currentEditorState.guiState.isValid())
+    // Restore browser state from processor's persistent storage
+    processor.restoreBrowserState(
+        currentEditorState.guiState.currentBrowserFolder,
+        currentEditorState.guiState.browserNavigationPath,
+        currentEditorState.guiState.selectedFile
+    );
+
+    if (mainComponent)
     {
         mainComponent->restoreGuiState(currentEditorState.guiState);
     }
@@ -300,4 +318,100 @@ void DrumGrooveEditor::visibilityChanged()
     
     // Note: We do NOT call any stop/pause methods here
     // The audio processing continues independently of GUI visibility
+}
+
+void DrumGrooveEditor::openMidiEditor(const juce::File& midiFile, DrumLibrary sourceLib)
+{
+    auto* editor = new MidiEditorComponent(processor.drumLibraryManager, processor.midiProcessor, processor);
+
+    if (editor->openMidiFile(midiFile, sourceLib))
+    {
+        editor->onClipSaved = [this](const juce::File& savedFile)
+        {
+            // Optionally refresh browser or timeline
+        };
+
+        editor->onEditorClosed = [this, editorPtr = editor]()
+        {
+            activeEditors.removeObject(editorPtr, true);
+        };
+
+        activeEditors.add(editor);
+        editor->setVisible(true);
+    }
+    else
+    {
+        delete editor;
+    }
+}
+
+void DrumGrooveEditor::createNewMidiGroove()
+{
+    // Get list of available origin libraries
+    auto libraryNames = processor.drumLibraryManager.getAllSourceLibraryNames();
+
+    if (libraryNames.isEmpty())
+    {
+        juce::AlertWindow::showMessageBoxAsync(
+            juce::AlertWindow::WarningIcon,
+            "No Libraries Available",
+            "Please add at least one origin library in the settings before creating a new MIDI groove.",
+            "OK"
+        );
+        return;
+    }
+
+    // Create library selection dialog
+    auto* window = new juce::AlertWindow("Select Origin Library",
+                                         "Choose the drum library mapping for this new MIDI groove:",
+                                         juce::MessageBoxIconType::QuestionIcon);
+
+    window->addComboBox("library", libraryNames, "Drum Library:");
+    window->addButton("OK", 1, juce::KeyPress(juce::KeyPress::returnKey));
+    window->addButton("Cancel", 0, juce::KeyPress(juce::KeyPress::escapeKey));
+
+    // Set default selection to first item
+    window->getComboBoxComponent("library")->setSelectedItemIndex(0);
+
+    window->enterModalState(true,
+                            juce::ModalCallbackFunction::create([this, window, libraryNames](int result)
+                            {
+                                if (result == 1)  // OK pressed
+                                {
+                                    auto selectedLib = window->getComboBoxComponent("library")->getText();
+                                    DrumLibrary sourceLib = processor.drumLibraryManager.getLibraryFromName(selectedLib);
+
+                                    DBG("Creating new MIDI with library: " + selectedLib + " (enum: " + juce::String(static_cast<int>(sourceLib)) + ")");
+
+                                    // Now create the editor with selected library
+                                    auto* editor = new MidiEditorComponent(processor.drumLibraryManager,
+                                                                           processor.midiProcessor,
+                                                                           processor);
+
+                                    double bpm = 120.0;
+                                    if (processor.sectionManager.getNumSections() > 0)
+                                    {
+                                        auto* section = processor.sectionManager.getSection(0);
+                                        if (section != nullptr)
+                                            bpm = section->bpm;
+                                    }
+
+                                    editor->createNewClip(sourceLib, bpm, 4);
+
+                                    editor->onClipSaved = [this](const juce::File& savedFile)
+                                    {
+                                        // Optionally add to timeline or refresh browser
+                                    };
+
+                                    editor->onEditorClosed = [this, editorPtr = editor]()
+                                    {
+                                        activeEditors.removeObject(editorPtr, true);
+                                    };
+
+                                    activeEditors.add(editor);
+                                    editor->setVisible(true);
+                                }
+
+                                delete window;
+                            }), true);
 }

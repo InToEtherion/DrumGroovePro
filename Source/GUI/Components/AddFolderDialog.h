@@ -28,6 +28,7 @@ private:
         juce::TextEditor folderPathEditor, libraryNameEditor;
         juce::TextButton browseButton, addButton, cancelButton, editOriginButton;
         juce::ComboBox sourceLibraryCombo;
+        juce::ToggleButton writableCheckbox;
         juce::ProgressBar progressBar;
         juce::Label statusLabel;
         double progress = 0.0;
@@ -40,6 +41,7 @@ private:
     std::unique_ptr<AddFolderComponent> component;
     juce::File selectedFolder;
     int selectedSourceLibrary = 0;
+    bool allowWritable = false;
     juce::String libraryName;
     juce::Array<juce::File> midiFiles;
     int currentChunkIndex = 0;

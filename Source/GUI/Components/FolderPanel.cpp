@@ -5,6 +5,9 @@
 #include "../LookAndFeel/ColourPalette.h"
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 #include "../../PluginProcessor.h"
+#include "../../PluginEditor.h"
+#include "MainComponent.h"
+#include "GrooveBrowser.h"
 
 // FavoritesModel implementation
 int FavoritesModel::getNumRows()
@@ -345,6 +348,19 @@ void FolderPanel::buttonClicked(juce::Button* button)
     {
         processor.drumLibraryManager.rescanFolders();
         refreshFolderList();
+
+        // NEW: Refresh the GrooveBrowser's current view
+        // Access through: PluginEditor -> MainComponent -> GrooveBrowser
+        if (auto* editor = dynamic_cast<DrumGrooveEditor*>(processor.getActiveEditor()))
+        {
+            if (auto* mainComp = editor->getMainComponent())
+            {
+                if (auto* browser = mainComp->getGrooveBrowser())
+                {
+                    browser->refreshCurrentView();
+                }
+            }
+        }
     }
     else if (button == &aboutButton)
     {

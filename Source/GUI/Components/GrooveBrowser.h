@@ -92,6 +92,8 @@ private:
     bool isExternalDragActive = false;
     juce::File lastTempDragFile;
 
+    DrumLibrary detectLibraryFromPath(const juce::File& file);
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BrowserColumn)
 };
 
@@ -140,6 +142,9 @@ public juce::DragAndDropContainer,
 
                     // Refresh target library combo box (called when libraries are added/removed)
                     void refreshTargetLibraryCombo();
+
+                    // Refresh current view after folder rescan
+                    void refreshCurrentView();
 
                     DrumLibrary getCurrentTargetLibrary() const;
 

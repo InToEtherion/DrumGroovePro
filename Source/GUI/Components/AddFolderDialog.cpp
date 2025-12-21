@@ -84,6 +84,30 @@ void AddFolderDialog::buttonClicked(juce::Button* button)
             auto sourceLib = processor.drumLibraryManager.getLibraryFromName(selectedText);
             selectedSourceLibrary = static_cast<int>(sourceLib);
             libraryName = comp->libraryNameEditor.getText();
+            allowWritable = comp->writableCheckbox.getToggleState();  // ADD THIS LINE
+
+            // ADD WARNING IF WRITABLE:
+            if (allowWritable)
+            {
+                int result = juce::AlertWindow::showOkCancelBox(
+                    juce::AlertWindow::WarningIcon,
+                    "Writable Mode Warning",
+                    "You have enabled WRITABLE mode for this folder:\n\n" +
+                    selectedFolder.getFullPathName() + "\n\n" +
+                    "This means files in this folder CAN BE MODIFIED when edited in the MIDI Editor.\n\n" +
+                    "Are you sure you want to allow changes to these files?",
+                    "Yes, Allow Changes",
+                    "No, Keep Read-Only"
+                );
+
+                if (result == 0)  // User clicked "No, Keep Read-Only"
+                {
+                    allowWritable = false;
+                    comp->writableCheckbox.setToggleState(false, juce::dontSendNotification);
+                    return;  // Don't proceed with adding
+                }
+            }
+
             startProcessing();
         }
     }
@@ -110,7 +134,7 @@ void AddFolderDialog::buttonClicked(juce::Button* button)
         };
 
         // FIX: Pass the callback to showEditor so it gets used!
-        OriginLibraryEditor::showEditor(processor.drumLibraryManager, this, refreshCallback);
+        OriginLibraryEditor::showEditor(processor.drumLibraryManager, &processor, this, refreshCallback);  // ADD &processor
     }
     else if (button == &comp->cancelButton)
     {
@@ -232,7 +256,7 @@ void AddFolderDialog::finishProcessing()
         return;
     }
 
-    processor.drumLibraryManager.addRootFolder(selectedFolder, static_cast<DrumLibrary>(selectedSourceLibrary));
+    processor.drumLibraryManager.addRootFolder(selectedFolder, static_cast<DrumLibrary>(selectedSourceLibrary), allowWritable);
 
     comp->statusLabel.setText("Library updated successfully!", juce::dontSendNotification);
 
@@ -327,6 +351,11 @@ AddFolderDialog::AddFolderComponent::AddFolderComponent(DrumGrooveProcessor& p)
     libraryNameEditor.setColour(juce::TextEditor::backgroundColourId, ColourPalette::inputBackground);
     addAndMakeVisible(libraryNameEditor);
 
+    writableCheckbox.setButtonText("Allow editing files in this folder (writable mode)");
+    writableCheckbox.setToggleState(false, juce::dontSendNotification);  // Default: read-only
+    writableCheckbox.setTooltip("WARNING: If enabled, files in this folder can be modified when edited in MIDI Editor");
+    addAndMakeVisible(writableCheckbox);
+
     progressBar.setPercentageDisplay(true);
     progressBar.setColour(juce::ProgressBar::backgroundColourId, ColourPalette::inputBackground);
     progressBar.setColour(juce::ProgressBar::foregroundColourId, ColourPalette::successGreen);
@@ -382,6 +411,9 @@ void AddFolderDialog::AddFolderComponent::resized()
 
     libraryNameLabel.setBounds(bounds.removeFromTop(25));
     libraryNameEditor.setBounds(bounds.removeFromTop(30));
+
+    bounds.removeFromTop(10);
+    writableCheckbox.setBounds(bounds.removeFromTop(25));
 
     bounds.removeFromTop(30);
 

@@ -4,12 +4,15 @@
 #include "Core/DrumLibraryManager.h"
 #include "GUI/LookAndFeel/ColourPalette.h"
 
+// Forward declaration
+class DrumGrooveProcessor;
+
 class OriginLibraryEditor : public juce::Component,
 public juce::ListBoxModel,
     public juce::Button::Listener
     {
     public:
-        OriginLibraryEditor(DrumLibraryManager& manager);
+        OriginLibraryEditor(DrumLibraryManager& manager, DrumGrooveProcessor* processor = nullptr);
         ~OriginLibraryEditor() override;
 
         void paint(juce::Graphics& g) override;
@@ -23,12 +26,14 @@ public juce::ListBoxModel,
         // Button::Listener
         void buttonClicked(juce::Button* button) override;
 
-        static void showEditor(DrumLibraryManager& manager, juce::Component* parent, std::function<void()> onLibrariesChanged = nullptr);
+        static void showEditor(DrumLibraryManager& manager, DrumGrooveProcessor* processor, juce::Component* parent, std::function<void()> onLibrariesChanged = nullptr);
 
         std::function<void()> onLibrariesChanged;
 
     private:
         DrumLibraryManager& drumLibraryManager;
+
+        DrumGrooveProcessor* processor;
 
         juce::Label titleLabel;
         juce::Label originLibrariesLabel;
@@ -100,6 +105,7 @@ public juce::ListBoxModel,
             juce::Label gmNoteLabel;
             juce::Label drumNameLabel;
             juce::TextButton editButton;
+            juce::TextButton playButton;
             juce::DrawableButton deleteButton;
 
             uint8_t currentOriginNote;
@@ -114,6 +120,7 @@ public juce::ListBoxModel,
 
             std::function<void()> onDelete;
             std::function<void()> onEdit;
+            std::function<void()> onPlay;
 
             MappingRow(uint8_t originNote, uint8_t gmNote, const juce::String& description, bool readOnly);
             ~MappingRow() override;

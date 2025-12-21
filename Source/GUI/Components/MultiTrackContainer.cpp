@@ -1228,8 +1228,6 @@ void MultiTrackContainer::mouseWheelMove(const juce::MouseEvent& e, const juce::
 
 bool MultiTrackContainer::keyPressed(const juce::KeyPress& key, juce::Component*)
 {
-    // CRITICAL: Always consume key events to prevent them from reaching the host DAW
-    bool handled = false;
 
     if (key.getKeyCode() == juce::KeyPress::spaceKey)
     {
@@ -1237,51 +1235,57 @@ bool MultiTrackContainer::keyPressed(const juce::KeyPress& key, juce::Component*
             pause();
         else
             play();
-        handled = true;
+        return true;
     }
-    else if (key.getKeyCode() == juce::KeyPress::deleteKey ||
+
+    if (key.getKeyCode() == juce::KeyPress::deleteKey ||
         key.getKeyCode() == juce::KeyPress::backspaceKey)
     {
         deleteSelectedClips();
-        handled = true;
+        return true;
     }
-    else if (key.isKeyCode('A') && key.getModifiers().isCtrlDown())
+
+    // Ctrl+A = Select All
+    if (key.getKeyCode() == 'a' && key.getModifiers().isCtrlDown())
     {
         selectAllClips();
-        handled = true;
+        return true;
     }
-    else if (key.isKeyCode('C') && key.getModifiers().isCtrlDown())
+
+    // Ctrl+C = Copy
+    if (key.getKeyCode() == 'c' && key.getModifiers().isCtrlDown())
     {
         copySelectedClips();
-        handled = true;
+        return true;
     }
-    else if (key.isKeyCode('X') && key.getModifiers().isCtrlDown())
+
+    // Ctrl+X = Cut
+    if (key.getKeyCode() == 'x' && key.getModifiers().isCtrlDown())
     {
         cutSelectedClips();
-        handled = true;
+        return true;
     }
-    else if (key.isKeyCode('V') && key.getModifiers().isCtrlDown())
+
+    // Ctrl+V = Paste
+    if (key.getKeyCode() == 'v' && key.getModifiers().isCtrlDown())
     {
         pasteClips();
-        handled = true;
+        return true;
     }
-    else if (key.isKeyCode('Z') && key.getModifiers().isCtrlDown() && !key.getModifiers().isShiftDown())
+
+    // Ctrl+Z = Undo
+    if (key.getKeyCode() == 'z' && key.getModifiers().isCtrlDown() && !key.getModifiers().isShiftDown())
     {
         undo();
-        handled = true;
+        return true;
     }
-    else if ((key.isKeyCode('Y') && key.getModifiers().isCtrlDown()) ||
-        (key.isKeyCode('Z') && key.getModifiers().isCtrlDown() && key.getModifiers().isShiftDown()))
+
+    // Ctrl+Y or Ctrl+Shift+Z = Redo
+    if ((key.getKeyCode() == 'y' && key.getModifiers().isCtrlDown()) ||
+        (key.getKeyCode() == 'z' && key.getModifiers().isCtrlDown() && key.getModifiers().isShiftDown()))
     {
         redo();
-        handled = true;
-    }
-    else if (key.getModifiers().isShiftDown() ||
-        key.getModifiers().isCtrlDown() ||
-        key.getModifiers().isAltDown())
-    {
-        // Consume all modifier key combinations to prevent DAW interference
-        handled = true;
+        return true;
     }
 
     // Always return true to consume the key event and prevent DAW interference

@@ -57,6 +57,7 @@ midiProcessor(drumLibraryManager)
 
 DrumGrooveProcessor::~DrumGrooveProcessor()
 {
+    isBeingDeleted.store(true);
     parameters.removeParameterListener("visualLatencyOffset", this);
     parameters.state.removeListener(this);
     drumLibraryManager.saveConfiguration();
@@ -125,13 +126,17 @@ void DrumGrooveProcessor::prepareToPlay(double sampleRate, int samplesPerBlock)
     midiProcessor.prepareToPlay(sampleRate, samplesPerBlock);
     drumMixer.prepareToPlay(sampleRate, samplesPerBlock);
     sampleEngine.prepareToPlay(sampleRate, samplesPerBlock);
-    audioBuffer.setSize(2, samplesPerBlock);
-    audioTrackBuffer.setSize(2, samplesPerBlock);
+
+    // CRITICAL FIX: Pre-allocate buffers with double size for safety
+    // Never call setSize() in processBlock() - causes audio glitches
+    int maxBufferSize = samplesPerBlock * 2;
+    audioBuffer.setSize(2, maxBufferSize);
+    audioTrackBuffer.setSize(2, maxBufferSize);
 
     // Initialize per-part buffers
     for (auto& buffer : partBuffers)
     {
-        buffer.setSize(2, samplesPerBlock);
+        buffer.setSize(2, maxBufferSize);
     }
 
     // Prepare registered audio tracks
@@ -548,6 +553,57 @@ GrooveBrowser* DrumGrooveProcessor::getGrooveBrowser() const
     return mainComp->getGrooveBrowser();
 }
 
+void DrumGrooveProcessor::saveBrowserState(const juce::File& currentFolder,
+                                           const juce::Array<juce::File>& navPath,
+                                           const juce::File& selectedFile)
+{
+    DBG("=== SAVING BROWSER STATE ===");
+    DBG("Current Folder: " + currentFolder.getFullPathName());
+    DBG("Selected File: " + selectedFile.getFullPathName());
+    DBG("Nav Path Count: " + juce::String(navPath.size()));
+
+    guiStateTree.setProperty("browserCurrentFolder", currentFolder.getFullPathName(), nullptr);
+    guiStateTree.setProperty("browserSelectedFile", selectedFile.getFullPathName(), nullptr);
+
+    // Save navigation path as comma-separated list
+    juce::String navPathStr;
+    for (int i = 0; i < navPath.size(); ++i)
+    {
+        if (i > 0) navPathStr += "|";
+        navPathStr += navPath[i].getFullPathName();
+        DBG("  Path[" + juce::String(i) + "]: " + navPath[i].getFullPathName());
+    }
+    guiStateTree.setProperty("browserNavPath", navPathStr, nullptr);
+}
+
+void DrumGrooveProcessor::restoreBrowserState(juce::File& currentFolder,
+                                              juce::Array<juce::File>& navPath,
+                                              juce::File& selectedFile) const
+                                              {
+                                                  DBG("=== RESTORING BROWSER STATE ===");
+
+                                                  currentFolder = juce::File(guiStateTree.getProperty("browserCurrentFolder", "").toString());
+                                                  selectedFile = juce::File(guiStateTree.getProperty("browserSelectedFile", "").toString());
+
+                                                  DBG("Restored Current Folder: " + currentFolder.getFullPathName());
+                                                  DBG("Restored Selected File: " + selectedFile.getFullPathName());
+
+                                                  navPath.clear();
+                                                  juce::String navPathStr = guiStateTree.getProperty("browserNavPath", "").toString();
+                                                  DBG("Nav Path String: " + navPathStr);
+
+                                                  if (navPathStr.isNotEmpty())
+                                                  {
+                                                      juce::StringArray paths = juce::StringArray::fromTokens(navPathStr, "|", "");
+                                                      for (const auto& path : paths)
+                                                      {
+                                                          navPath.add(juce::File(path));
+                                                          DBG("  Restored Path: " + path);
+                                                      }
+                                                  }
+                                                  DBG("Total paths restored: " + juce::String(navPath.size()));
+                                              }
+
 void DrumGrooveProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
@@ -556,6 +612,13 @@ void DrumGrooveProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
 
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear(i, 0, buffer.getNumSamples());
+
+    // Merge preview notes for audition/preview
+    if (!previewMidiBuffer.isEmpty())
+    {
+        midiMessages.addEvents(previewMidiBuffer, 0, -1, 0);
+        previewMidiBuffer.clear();
+    }
 
     // Get current BPM
     double currentBPM = 120.0;
@@ -611,20 +674,11 @@ void DrumGrooveProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
 
         const int numSamples = buffer.getNumSamples();
 
-        // Ensure per-part buffers are correct size
-        for (auto& partBuffer : partBuffers)
-        {
-            if (partBuffer.getNumSamples() != numSamples)
-            {
-                partBuffer.setSize(2, numSamples, false, false, true);
-            }
-        }
+        // CRITICAL FIX: No setSize() calls on audio thread - buffers pre-allocated in prepareToPlay
+        // Just assert the buffer is large enough (will be caught in debug builds)
+        jassert(numSamples <= audioBuffer.getNumSamples());
+        jassert(numSamples <= partBuffers[0].getNumSamples());
 
-        // Ensure output buffer is correct size
-        if (audioBuffer.getNumSamples() != numSamples)
-        {
-            audioBuffer.setSize(2, numSamples, false, false, true);
-        }
         audioBuffer.clear();
 
         // Process MIDI through sample engine to per-part buffers
@@ -643,13 +697,19 @@ void DrumGrooveProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         if (midiProcessor.isPlaying())
         {
             juce::SpinLock::ScopedTryLockType lock(audioTrackLock);
-            if (lock.isLocked() && !registeredAudioTracks.empty())
+            if (!lock.isLocked())
             {
-                // Ensure audio track buffer is correct size
-                if (audioTrackBuffer.getNumSamples() != numSamples)
+                // CRITICAL FIX: Log lock contention for debugging
+                static int lockFailCount = 0;
+                if (++lockFailCount % 100 == 0)  // Log every 100 failures
                 {
-                    audioTrackBuffer.setSize(2, numSamples, false, false, true);
+                    DBG("WARNING: Audio track lock failed " + juce::String(lockFailCount) + " times - possible contention");
                 }
+            }
+            else if (!registeredAudioTracks.empty())
+            {
+                // CRITICAL FIX: No setSize() on audio thread
+                jassert(numSamples <= audioTrackBuffer.getNumSamples());
 
                 double playheadSecs = midiProcessor.getPlayheadPosition();
 
@@ -684,11 +744,8 @@ void DrumGrooveProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         {
             const int numSamples = buffer.getNumSamples();
 
-            // Ensure audio track buffer is correct size
-            if (audioTrackBuffer.getNumSamples() != numSamples)
-            {
-                audioTrackBuffer.setSize(2, numSamples, false, false, true);
-            }
+            // CRITICAL FIX: No setSize() on audio thread
+            jassert(numSamples <= audioTrackBuffer.getNumSamples());
 
             double playheadSecs = midiProcessor.getPlayheadPosition();
 
@@ -872,4 +929,32 @@ void DrumGrooveProcessor::saveGlobalSettings()
     {
         DBG("Saved global settings: visualLatencyOffset = " + juce::String(latencyMs) + " ms");
     }
+}
+
+void DrumGrooveProcessor::triggerPreviewNote(int midiNoteNumber, int velocity)
+{
+    if (midiNoteNumber < 0 || midiNoteNumber > 127)
+        return;
+
+    DBG("Triggering preview note: " + juce::String(midiNoteNumber));
+
+    // Create MIDI note-on message
+    auto noteOn = juce::MidiMessage::noteOn(1, midiNoteNumber, (juce::uint8)velocity);
+
+    // Inject into the preview buffer (will be merged in processBlock)
+    previewMidiBuffer.addEvent(noteOn, 0);
+
+    // CRITICAL FIX: Capture processor pointer and check deletion flag
+    auto* processor = this;
+
+    // Schedule note-off after 300ms
+    juce::Timer::callAfterDelay(300, [processor, midiNoteNumber]()
+    {
+        // Check if processor still exists before accessing
+        if (!processor->isBeingDeleted.load())
+        {
+            auto noteOff = juce::MidiMessage::noteOff(1, midiNoteNumber);
+            processor->previewMidiBuffer.addEvent(noteOff, 0);
+        }
+    });
 }

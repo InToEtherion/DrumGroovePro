@@ -5,6 +5,9 @@
 #include <vector>
 #include <map>
 
+// Forward declaration
+enum class DrumPartType;
+
 enum class DrumLibrary
 {
     Unknown = 0,
@@ -25,7 +28,8 @@ enum class DrumLibrary
     DrumLocker = 15,
     MLDrums = 16,
     SalamanderDrumkit = 17,
-    MuldjordKit3 = 18
+    MuldjordKit3 = 18,
+    Aasimonster2 = 19
 };
 
 class DrumLibraryManager
@@ -34,7 +38,7 @@ public:
     DrumLibraryManager();
     ~DrumLibraryManager();
 
-    void addRootFolder(const juce::File& folder, DrumLibrary sourceLib);
+    void addRootFolder(const juce::File& folder, DrumLibrary sourceLib, bool isWritable = false);
     void removeRootFolder(int index);
     void rescanFolders();
 
@@ -42,6 +46,8 @@ public:
     juce::File getRootFolder(int index) const;
     juce::String getRootFolderName(int index) const;
     DrumLibrary getRootFolderSourceLibrary(int index) const;
+    bool isRootFolderWritable(int index) const;
+    void setRootFolderWritable(int index, bool writable);
     bool isFolderAlreadyAdded(const juce::File& folder) const;
 
     uint8_t mapNoteToLibrary(uint8_t note, DrumLibrary from, DrumLibrary to) const;
@@ -93,17 +99,27 @@ public:
 
     // Get explicit mappings (for editor display)
     std::map<uint8_t, uint8_t> getExplicitMappingsForLibrary(DrumLibrary library) const;
-    std::map<uint8_t, uint8_t> getOriginLibraryMappings(DrumLibrary originLibrary) const;  // For origin â†’ GM
+    std::map<uint8_t, uint8_t> getOriginLibraryMappings(DrumLibrary originLibrary) const;
     void removeMappingForNote(DrumLibrary library, uint8_t gmNote);
 
     juce::String getLibraryNameIncludingCustom(DrumLibrary library) const;
     void initializeTargetMappingWithGM(DrumLibrary targetLibrary);
+
+    // Get a representative note number for a drum part from a specific library
+    int getNoteNumberForDrumPart(DrumPartType part, DrumLibrary library) const;
+
+    // Get drum part name for display
+    juce::String getDrumPartName(DrumPartType part, DrumLibrary library) const;
+
+    // Check if a drum part has a valid mapping for a library
+    bool hasValidMapping(DrumPartType part, DrumLibrary library) const;
 
 private:
     struct FolderInfo
     {
         juce::File folder;
         DrumLibrary sourceLibrary;
+        bool isWritable = false;
     };
 
     std::vector<FolderInfo> rootFolders;

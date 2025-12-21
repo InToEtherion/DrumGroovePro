@@ -1,5 +1,6 @@
 #include "HeaderSection.h"
 #include "../../PluginProcessor.h"
+#include "../../PluginEditor.h"
 #include "../LookAndFeel/ColourPalette.h"
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 
@@ -77,6 +78,28 @@ void HeaderSection::setupComponents()
     currentBPMLabel.setColour(juce::Label::textColourId, ColourPalette::mutedText);
     addAndMakeVisible(currentBPMLabel);
 
+    createNewGrooveButton.setButtonText("Create New");
+    createNewGrooveButton.onClick = [this]()
+    {
+        auto* editor = findParentComponentOfClass<DrumGrooveEditor>();  // <-- CORRECT!
+        if (editor)
+        {
+            editor->createNewMidiGroove();
+        }
+    };
+    addAndMakeVisible(createNewGrooveButton);
+
+    // Batch Remap button
+    batchRemapButton.setButtonText("Batch Remap");
+    batchRemapButton.setTooltip("Batch remap MIDI files from one drum library to another");
+    batchRemapButton.onClick = [this]() {
+        auto* dialog = new BatchRemapDialog(processor.drumLibraryManager);
+        dialog->onDialogClosed = [dialog]() {
+            delete dialog;
+        };
+    };
+    addAndMakeVisible(batchRemapButton);
+
     updateBPMControlsVisibility();
 }
 
@@ -105,6 +128,12 @@ void HeaderSection::resized()
 
     // Current BPM label
     currentBPMLabel.setBounds(bounds.removeFromLeft(150).withHeight(25));
+
+    // Buttons
+    bounds.removeFromLeft(20);
+    createNewGrooveButton.setBounds(bounds.removeFromLeft(100).withHeight(25));
+    bounds.removeFromLeft(10);
+    batchRemapButton.setBounds(bounds.removeFromLeft(120).withHeight(25));
 }
 
 void HeaderSection::buttonClicked(juce::Button* button)

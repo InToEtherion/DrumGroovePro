@@ -37,6 +37,7 @@ public:
     void clearAllClips();
     void clearClip(const juce::String& clipId);
 
+    void addPreviewNote(const juce::MidiMessage& noteOn, const juce::MidiMessage& noteOff);
     void updateTrackBPM(int trackNumber, double newBPM);
     void updateClipBoundaries(const juce::String& clipId, double newStartTime, double newDuration);
 
@@ -87,6 +88,9 @@ private:
 
     std::vector<std::unique_ptr<MidiClipPlayback>> activeClips;
     juce::CriticalSection clipLock;
+
+    juce::MidiBuffer previewNoteBuffer;
+    juce::CriticalSection previewLock;
 
     bool loadMidiFileWithPrecision(const juce::File& file, MidiClipPlayback& clip);
 

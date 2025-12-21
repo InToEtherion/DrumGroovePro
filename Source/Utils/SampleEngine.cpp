@@ -5,6 +5,16 @@ SampleEngine::SampleEngine()
 {
     // Register audio formats for loading WAV files
     formatManager.registerBasicFormats();
+
+    // CRITICAL FIX: Initialize thread-safe random generator with proper seed
+    std::random_device rd;
+    audioThreadRng.seed(rd());
+
+    // Initialize pending notes array
+    for (auto& note : pendingNotesArray)
+    {
+        note.active = false;
+    }
 }
 
 SampleEngine::~SampleEngine()
@@ -14,15 +24,22 @@ SampleEngine::~SampleEngine()
 
 SampleEngine::LibraryFormat SampleEngine::detectLibraryFormat(const juce::File& libraryDir) const
 {
-    // Check for DrumGizmo format (has KitName.xml matching directory name)
-    juce::String kitName = libraryDir.getFileName();
-    juce::File kitXml = libraryDir.getChildFile(kitName + ".xml");
+    // Check for DrumGizmo format (has Midimap.xml and any kit XML)
     juce::File midimapXml = libraryDir.getChildFile("Midimap.xml");
 
-    if (kitXml.existsAsFile() && midimapXml.existsAsFile())
+    if (midimapXml.existsAsFile())
     {
-        DBG("Detected DrumGizmo format (found " + kitName + ".xml and Midimap.xml)");
-        return LibraryFormat::DrumGizmo;
+        // Look for any .xml file that's not Midimap.xml (that's the kit XML)
+        juce::Array<juce::File> xmlFiles;
+        libraryDir.findChildFiles(xmlFiles, juce::File::findFiles, false, "*.xml");
+        for (const auto& xmlFile : xmlFiles)
+        {
+            if (xmlFile.getFileName() != "Midimap.xml")
+            {
+                DBG("Detected DrumGizmo format (found " + xmlFile.getFileName() + " and Midimap.xml)");
+                return LibraryFormat::DrumGizmo;
+            }
+        }
     }
 
     // Check for SFZ format (has ALL.sfz file)
@@ -278,9 +295,16 @@ void SampleEngine::unloadSamples()
     samplesLoaded = false;
     currentLibraryName.clear();
     currentFormat = LibraryFormat::Unknown;
-    lastKickWas35 = false;  // Reset alternation state
-    lastRoundRobinIndex.clear();  // Reset round robin state
-    pendingNotes.clear();  // Clear any pending humanized notes
+    lastKickWas35 = false;
+    lastRoundRobinIndex.clear();
+
+    // CRITICAL FIX: Clear pending notes array
+    for (auto& note : pendingNotesArray)
+    {
+        note.active = false;
+    }
+    pendingNotesWriteIndex.store(0);
+
     DBG("All samples unloaded");
 }
 
@@ -289,13 +313,22 @@ void SampleEngine::prepareToPlay(double sampleRate, int maximumExpectedSamplesPe
     currentSampleRate = sampleRate;
     currentBlockSize = maximumExpectedSamplesPerBlock;
     stopAllVoices();
-    pendingNotes.clear();  // Clear any pending humanized notes
 
-    // Initialize per-part buffers
+    // CRITICAL FIX: Pre-allocate buffers with double size for safety
+    int maxBufferSize = maximumExpectedSamplesPerBlock * 2;
+
+    // Initialize per-part buffers with double size
     for (auto& buffer : partBuffers)
     {
-        buffer.setSize(2, maximumExpectedSamplesPerBlock);
+        buffer.setSize(2, maxBufferSize);
     }
+
+    // Clear pending notes
+    for (auto& note : pendingNotesArray)
+    {
+        note.active = false;
+    }
+    pendingNotesWriteIndex.store(0);
 }
 
 int SampleEngine::getActualNoteToPlay(int requestedNote)
@@ -352,8 +385,12 @@ int SampleEngine::applyVelocityHumanization(int velocity)
     // Calculate max variation based on humanization percentage
     float maxVariation = (velocityHumanization / 100.0f) * static_cast<float>(MAX_VELOCITY_VARIATION);
 
+    // CRITICAL FIX: Use thread-safe random generator
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+    float randomValue = dist(audioThreadRng);
+
     // Generate random variation in range [-maxVariation, +maxVariation]
-    float variation = (humanizationRandom.nextFloat() * 2.0f - 1.0f) * maxVariation;
+    float variation = randomValue * maxVariation;
 
     // Apply variation and clamp to valid MIDI velocity range
     int humanizedVelocity = velocity + static_cast<int>(std::round(variation));
@@ -412,7 +449,7 @@ const SFZParser::Region* SampleEngine::getRegionWithRoundRobin(int midiNote, int
         // Higher roundRobinAmount = more likely to pick a different sample
         float probabilityToChange = roundRobinAmount / 100.0f;
 
-        if (humanizationRandom.nextFloat() < probabilityToChange)
+        if (std::uniform_real_distribution<float>(0.0f, 1.0f)(audioThreadRng) < probabilityToChange)
         {
             // Select a different sample randomly
             size_t newIndex;
@@ -425,7 +462,7 @@ const SFZParser::Region* SampleEngine::getRegionWithRoundRobin(int midiNote, int
             {
                 // Pick random different sample
                 do {
-                    newIndex = static_cast<size_t>(humanizationRandom.nextInt(static_cast<int>(matchingRegions.size())));
+                    newIndex = static_cast<size_t>(std::uniform_int_distribution<size_t>(0, matchingRegions.size() - 1)(audioThreadRng));
                 } while (newIndex == lastIndex && matchingRegions.size() > 1);
             }
             lastIndex = newIndex;
@@ -472,8 +509,6 @@ const DrumGizmoParser::Sample* SampleEngine::getSampleWithRoundRobin(int midiNot
     size_t& lastIndex = lastRoundRobinIndex[midiNote];
 
     // CRITICAL FIX: Ensure lastIndex is valid for current matchingSamples size
-    // The number of matching samples can vary based on velocity, so we must
-    // clamp the stored index to prevent out-of-bounds access
     if (lastIndex >= matchingSamples.size())
     {
         lastIndex = 0;
@@ -490,7 +525,9 @@ const DrumGizmoParser::Sample* SampleEngine::getSampleWithRoundRobin(int midiNot
         // Partial round robin
         float probabilityToChange = roundRobinAmount / 100.0f;
 
-        if (humanizationRandom.nextFloat() < probabilityToChange)
+        // CRITICAL FIX: Use thread-safe random generator
+        std::uniform_real_distribution<float> dist(0.0f, 1.0f);
+        if (dist(audioThreadRng) < probabilityToChange)
         {
             size_t newIndex;
             if (matchingSamples.size() == 2)
@@ -499,8 +536,9 @@ const DrumGizmoParser::Sample* SampleEngine::getSampleWithRoundRobin(int midiNot
             }
             else
             {
+                std::uniform_int_distribution<size_t> intDist(0, matchingSamples.size() - 1);
                 do {
-                    newIndex = static_cast<size_t>(humanizationRandom.nextInt(static_cast<int>(matchingSamples.size())));
+                    newIndex = intDist(audioThreadRng);
                 } while (newIndex == lastIndex && matchingSamples.size() > 1);
             }
             lastIndex = newIndex;
@@ -518,6 +556,9 @@ void SampleEngine::processBlockToPartBuffers(std::array<juce::AudioBuffer<float>
 
     const int blockSize = outPartBuffers[0].getNumSamples();
 
+    // CRITICAL FIX: No setSize() on audio thread - buffers pre-allocated in prepareToPlay
+    jassert(blockSize <= partBuffers[0].getNumSamples());
+
     // Clear all part buffers
     for (auto& buffer : outPartBuffers)
     {
@@ -527,35 +568,39 @@ void SampleEngine::processBlockToPartBuffers(std::array<juce::AudioBuffer<float>
     // ============================================================================
     // PHASE 1: Process pending notes from previous blocks (timing humanization)
     // ============================================================================
-    for (auto it = pendingNotes.begin(); it != pendingNotes.end(); )
+    for (int i = 0; i < pendingNotesWriteIndex.load(); )
     {
-        it->samplesRemaining -= blockSize;
+        auto& pending = pendingNotesArray[i];
 
-        if (it->samplesRemaining <= 0)
+        if (!pending.active)
         {
-            // This note should trigger now (the remaining samples is the offset into this block)
-            int triggerOffset = blockSize + it->samplesRemaining;  // samplesRemaining is negative
+            ++i;
+            continue;
+        }
+
+        pending.samplesRemaining -= blockSize;
+
+        if (pending.samplesRemaining <= 0)
+        {
+            // This note should trigger now
+            int triggerOffset = blockSize + pending.samplesRemaining;  // samplesRemaining is negative
             triggerOffset = juce::jlimit(0, blockSize - 1, triggerOffset);
 
-            DBG("Pending Note Trigger: note=" + juce::String(it->midiNote) +
-            " vel=" + juce::String(it->velocity) +
+            DBG("Pending Note Trigger: note=" + juce::String(pending.midiNote) +
+            " vel=" + juce::String(pending.velocity) +
             " @sample=" + juce::String(triggerOffset));
 
             // Trigger the note (velocity already humanized, timing already applied)
-            handleNoteOnDirect(it->midiNote, it->velocity, triggerOffset);
+            handleNoteOnDirect(pending.midiNote, pending.velocity, triggerOffset);
 
-            it = pendingNotes.erase(it);
+            pending.active = false;
         }
-        else
-        {
-            ++it;
-        }
+
+        ++i;
     }
 
     // ============================================================================
     // PHASE 2: Process incoming MIDI events with sample-accurate timing
-    // Each MIDI event has a sample offset (samplePosition) that tells us exactly
-    // when in this block the note should trigger
     // ============================================================================
     for (const auto metadata : midiMessages)
     {
@@ -582,7 +627,6 @@ void SampleEngine::processBlockToPartBuffers(std::array<juce::AudioBuffer<float>
 
     // ============================================================================
     // PHASE 3: Process all active voices, routing to appropriate part buffer
-    // Each voice knows its start sample offset and will output correctly
     // ============================================================================
     for (auto& voice : voices)
     {
@@ -591,7 +635,6 @@ void SampleEngine::processBlockToPartBuffers(std::array<juce::AudioBuffer<float>
             int partIndex = voice.getDrumPart();
             if (partIndex >= 0 && partIndex < NUM_DRUM_PARTS)
             {
-                // CRITICAL: Pass block size so voice can handle sample-accurate start
                 voice.processBlock(outPartBuffers[partIndex], blockSize);
             }
         }
@@ -658,13 +701,16 @@ void SampleEngine::handleNoteOn(int midiNote, int velocity, int sampleOffset)
     // =========================================================================
     if (timingHumanization > 0.0f)
     {
+        // CRITICAL FIX: Use thread-safe random generator
+        std::uniform_real_distribution<double> dist(0.0, 1.0);
+        double randomValue = dist(audioThreadRng);
+
         // Calculate timing variation in samples
         double maxVariationMs = (timingHumanization / 100.0) * MAX_TIMING_VARIATION_MS;
         double maxVariationSamples = (maxVariationMs / 1000.0) * currentSampleRate;
 
-        // Generate random variation in range [0, +maxVariation] (delay only, no advance)
-        // This is simpler and more musically useful - notes can be late but not early
-        double variation = humanizationRandom.nextFloat() * maxVariationSamples;
+        // Generate random variation in range [0, +maxVariation]
+        double variation = randomValue * maxVariationSamples;
 
         int totalDelaySamples = sampleOffset + static_cast<int>(std::round(variation));
 
@@ -683,17 +729,28 @@ void SampleEngine::handleNoteOn(int midiNote, int velocity, int sampleOffset)
         }
         else
         {
-            // Queue for future block
-            PendingNote pending;
-            pending.midiNote = midiNote;
-            pending.velocity = humanizedVelocity;
-            pending.samplesRemaining = totalDelaySamples;
+            // CRITICAL FIX: Queue for future block using pre-allocated array
+            int writeIdx = pendingNotesWriteIndex.load();
+            if (writeIdx < MAX_PENDING_NOTES)
+            {
+                auto& pending = pendingNotesArray[writeIdx];
+                pending.midiNote = midiNote;
+                pending.velocity = humanizedVelocity;
+                pending.samplesRemaining = totalDelaySamples;
+                pending.active = true;
 
-            pendingNotes.push_back(pending);
+                pendingNotesWriteIndex.store(writeIdx + 1);
 
-            DBG("Timing Humanization (queued): note=" + juce::String(midiNote) +
-            " delay=" + juce::String(totalDelaySamples) +
-            " samples (" + juce::String((static_cast<double>(totalDelaySamples) / currentSampleRate) * 1000.0, 2) + " ms)");
+                DBG("Timing Humanization (queued): note=" + juce::String(midiNote) +
+                " delay=" + juce::String(totalDelaySamples) +
+                " samples (" + juce::String((static_cast<double>(totalDelaySamples) / currentSampleRate) * 1000.0, 2) + " ms)");
+            }
+            else
+            {
+                // Queue is full - trigger immediately as fallback
+                DBG("WARNING: Pending notes queue full, triggering immediately");
+                handleNoteOnDirect(midiNote, humanizedVelocity, sampleOffset);
+            }
         }
     }
     else

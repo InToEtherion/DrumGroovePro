@@ -3,6 +3,7 @@
 #include "DrumLibraryMappingEditor.h"
 #include "SamplesManagerWindow.h"
 #include "../../PluginProcessor.h"
+#include "../../PluginEditor.h"
 #include "../LookAndFeel/ColourPalette.h"
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 #include <cstdlib>  // for std::getenv
@@ -706,7 +707,7 @@ isHandlingTargetLibraryChange(false)
     editMappingsButton.onClick = [this]()
     {
         // Open the mapping editor as a modal dialog with refresh callback
-        DrumLibraryMappingEditor::showEditor(processor.drumLibraryManager, this,
+        DrumLibraryMappingEditor::showEditor(processor.drumLibraryManager, &processor, this,
                                              [this]()
                                              {
                                                  // This callback is called when libraries are added/removed in the editor
@@ -1133,11 +1134,13 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
             currentPlaybackMidiTicks = roundedTicks;
             currentPlaybackTPQN = ticksPerQuarterNote;
 
-            // Calculate duration at CURRENT headerBPM
-            double fileDurationInSeconds = (roundedTicks / ticksPerQuarterNote) * (60.0 / headerBPM);
-
-            // Ensure minimum duration
+            // Use actual note end time, not bar-rounded
+            double fileDurationInSeconds = (maxTimeInTicks / ticksPerQuarterNote) * (60.0 / headerBPM);
             fileDurationInSeconds = juce::jmax(0.1, fileDurationInSeconds);
+
+            // Store for loop recalculation
+            currentPlaybackMidiTicks = maxTimeInTicks;
+            currentPlaybackTPQN = ticksPerQuarterNote;
 
             // NEW: Enable loop by default for browser playback
             // Add the clip with proper duration IN SECONDS
@@ -1384,19 +1387,32 @@ void GrooveBrowser::timerCallback()
         {
             processor.midiProcessor.updateTrackBPM(0, currentBPM);
             lastKnownBPM = currentBPM;
+            // Update loop duration for new BPM
+            updateLoopDurationForBPMChange();
             DBG("GrooveBrowser: BPM changed to " + juce::String(currentBPM, 2) + " BPM");
         }
     }
 }
 
-void GrooveBrowser::restoreNavigationState(const juce::File& folder, const juce::Array<juce::File>& path)
+void GrooveBrowser::restoreNavigationState(const juce::File& currentFolder,
+                                           const juce::Array<juce::File>& navPath)
 {
-    currentPath = folder;
-    navigationPath = path;
+    DBG("=== GrooveBrowser::restoreNavigationState ===");
+    DBG("Current Folder: " + currentFolder.getFullPathName());
+    DBG("Nav Path Count: " + juce::String(navPath.size()));
 
-    if (folder.exists())
+    // Restore navigation path
+    navigationPath = navPath;
+
+    // Navigate to the folder to update UI
+    if (currentFolder.exists() && currentFolder.isDirectory())
     {
-        loadFolderContents(folder);
+        DBG("Navigating to folder...");
+        navigateToFolder(currentFolder, navPath.size() - 1);
+    }
+    else
+    {
+        DBG("Folder doesn't exist or isn't a directory");
     }
 }
 
@@ -1537,6 +1553,67 @@ void GrooveBrowser::scanFolder(const juce::File& folder, BrowserColumn* column)
     }
 
     column->setItems(items, isFolder, filePaths);
+}
+
+void GrooveBrowser::refreshCurrentView()
+{
+    // If no navigation path, nothing to refresh
+    if (navigationPath.isEmpty() || folderColumns.isEmpty())
+        return;
+
+    DBG("GrooveBrowser: Refreshing current view after rescan");
+
+    // Rescan each column in the current navigation path
+    for (int i = 0; i < folderColumns.size() && i < navigationPath.size(); ++i)
+    {
+        auto* column = folderColumns[i];
+        auto folder = navigationPath[i];
+
+        if (folder.exists() && folder.isDirectory())
+        {
+            // Remember the currently selected item
+            juce::String selectedItem = column->getSelectedItem();
+            int selectedRow = column->getSelectedRow();
+
+            // Rescan the folder
+            scanFolder(folder, column);
+
+            // Try to restore selection if the item still exists
+            for (int row = 0; row < column->items.size(); ++row)
+            {
+                if (column->items[row] == selectedItem)
+                {
+                    column->selectRow(row);
+                    break;
+                }
+            }
+
+            // If the item doesn't exist anymore, clear selection
+            if (column->getSelectedRow() < 0 && column->getNumRows() > 0)
+            {
+                column->deselectAllRows();
+            }
+        }
+    }
+
+    // If there's a MIDI file currently selected, refresh the parts column
+    if (currentMidiFile.existsAsFile())
+    {
+        // Check if the MIDI file still exists
+        if (currentMidiFile.existsAsFile())
+        {
+            // Redissect to refresh parts column
+            redissectCurrentMidiFile();
+        }
+        else
+        {
+            // File was deleted, clear parts column
+            removePartsColumn();
+            currentMidiFile = juce::File();
+        }
+    }
+
+    repaint();
 }
 
 void GrooveBrowser::navigateToFolder(const juce::File& folder, int columnIndex)
@@ -1721,9 +1798,17 @@ void BrowserColumn::showContextMenu(int row, const juce::Point<int>& position)
         return;
 
     juce::PopupMenu menu;
-    menu.addItem(1, "Export to Desktop...");
+
+    // Add "Edit MIDI..." option for .mid files
+    if (midiFile.hasFileExtension(".mid"))
+    {
+        menu.addItem(1, "Edit MIDI...");
+        menu.addSeparator();
+    }
+
+    menu.addItem(2, "Export to Desktop...");
     menu.addSeparator();
-    menu.addItem(2, "Show in Explorer");
+    menu.addItem(3, "Show in Explorer");
 
     // Show menu at actual mouse position
     menu.showMenuAsync(juce::PopupMenu::Options()
@@ -1731,11 +1816,26 @@ void BrowserColumn::showContextMenu(int row, const juce::Point<int>& position)
                                                static_cast<int>(mousePos.y), 1, 1)),
                        [this, midiFile](int result)
                        {
-                           if (result == 1)
+                           if (result == 1) // Edit MIDI
+                           {
+                               if (midiFile.hasFileExtension(".mid"))
+                               {
+                                   // Detect library from file path
+                                   DrumLibrary sourceLib = detectLibraryFromPath(midiFile);
+
+                                   // Find DrumGrooveEditor to open MIDI editor
+                                   auto* editor = findParentComponentOfClass<DrumGrooveEditor>();
+                                   if (editor)
+                                   {
+                                       editor->openMidiEditor(midiFile, sourceLib);
+                                   }
+                               }
+                           }
+                           else if (result == 2) // Export
                            {
                                exportFileToDesktop(midiFile);
                            }
-                           else if (result == 2)
+                           else if (result == 3) // Show in Explorer
                            {
                                midiFile.revealToUser();
                            }
@@ -2188,4 +2288,29 @@ void GrooveBrowser::showSamplesManager()
 
     samplesManagerWindow->setVisible(true);
     samplesManagerWindow->toFront(true);
+}
+
+DrumLibrary BrowserColumn::detectLibraryFromPath(const juce::File& file)
+{
+    // Proper approach: Check which registered root folder contains this file
+    // and use the library mapping from OriginLibraryMappings.xml
+    auto& libManager = processor.drumLibraryManager;
+
+    for (int i = 0; i < libManager.getNumRootFolders(); ++i)
+    {
+        auto rootFolder = libManager.getRootFolder(i);
+        if (file.isAChildOf(rootFolder))
+        {
+            // This returns the library enum from OriginLibraryMappings.xml
+            DrumLibrary sourceLib = libManager.getRootFolderSourceLibrary(i);
+            DBG("detectLibraryFromPath: Found " + file.getFileName() +
+            " in root folder " + rootFolder.getFullPathName() +
+            " -> Library: " + juce::String(static_cast<int>(sourceLib)));
+            return sourceLib;
+        }
+    }
+
+    // If not in any registered folder, default to General MIDI
+    DBG("detectLibraryFromPath: File not in any registered library folder, defaulting to General MIDI");
+    return DrumLibrary::GeneralMIDI;
 }

@@ -1,4 +1,5 @@
 #include "DrumLibraryManager.h"
+#include "MidiDissector.h"
 
 DrumLibraryManager::DrumLibraryManager()
 {
@@ -33,13 +34,14 @@ DrumLibraryManager::~DrumLibraryManager()
     saveOriginMappings();
 }
 
-void DrumLibraryManager::addRootFolder(const juce::File& folder, DrumLibrary sourceLib)
+void DrumLibraryManager::addRootFolder(const juce::File& folder, DrumLibrary sourceLib, bool isWritable)
 {
     if (folder.exists() && folder.isDirectory())
     {
         FolderInfo fi;
         fi.folder = folder;
         fi.sourceLibrary = sourceLib;
+        fi.isWritable = isWritable;
 
         rootFolders.push_back(fi);
         saveConfiguration();
@@ -51,9 +53,9 @@ void DrumLibraryManager::initializeMappingTables()
     // Initialize identity mappings for ALL library pairs (0-16 = libraries 2-18)
     // Enum goes: Unknown=0, Bypass=1, GeneralMIDI=2...SalamanderDrumkit=17, MuldjordKit3=18
     // With -2 offset: indices 0-16 for libraries 2-18
-    for (int from = 0; from < 17; ++from)
+    for (int from = 0; from < 18; ++from)
     {
-        for (int to = 0; to < 17; ++to)
+        for (int to = 0; to < 18; ++to)
         {
             for (uint8_t note = 0; note < 128; ++note)
             {
@@ -719,6 +721,44 @@ void DrumLibraryManager::initializeMappingTables()
     // China
     muldjordToGM[52] = 52;  // China -> GM Chinese Cymbal
 
+    // ==================== AASIMONSTER2 MAPPING ====================
+    // Aasimonster2 = 19, GM = 2, so indices are 17 and 0 with -2 offset
+    auto& aasimonsterToGM = mappings[17][0];
+
+    // Kicks (Aasimonster has separate kick_l and kick_r)
+    aasimonsterToGM[35] = 36;  // kick_r -> GM Kick
+    aasimonsterToGM[36] = 36;  // kick_l -> GM Kick
+
+    // Snares
+    aasimonsterToGM[38] = 38;  // snare_on_center -> GM Snare
+    aasimonsterToGM[40] = 40;  // snare_off_center -> GM Electric Snare
+    aasimonsterToGM[37] = 37;  // snare_rim_shot -> GM Side Stick
+
+    // Hi-hats
+    aasimonsterToGM[42] = 42;  // hihat_closed1 -> GM Closed Hi-Hat
+    aasimonsterToGM[46] = 46;  // hihat_open -> GM Open Hi-Hat
+
+    // Toms
+    aasimonsterToGM[43] = 43;  // tom_4 (floor) -> GM High Floor Tom
+    aasimonsterToGM[45] = 45;  // tom_3 -> GM Low Tom
+    aasimonsterToGM[47] = 47;  // tom_2 -> GM Low-Mid Tom
+    aasimonsterToGM[48] = 48;  // tom_1 -> GM Hi-Mid Tom
+
+    // Crashes
+    aasimonsterToGM[49] = 49;  // crash1 -> GM Crash Cymbal 1
+    aasimonsterToGM[50] = 49;  // crash1_stop -> GM Crash Cymbal 1
+    aasimonsterToGM[57] = 57;  // crash2 -> GM Crash Cymbal 2
+    aasimonsterToGM[58] = 57;  // crash2_stop -> GM Crash Cymbal 2
+
+    // Rides
+    aasimonsterToGM[51] = 51;  // ride -> GM Ride Cymbal 1
+    aasimonsterToGM[53] = 53;  // ride_bell2 -> GM Ride Bell
+
+    // China & Zilbel
+    aasimonsterToGM[52] = 52;  // china_18_inch -> GM Chinese Cymbal
+    aasimonsterToGM[55] = 80;  // zilbel -> GM Mute Triangle
+
+
     // ==================== CREATE REVERSE MAPPINGS (GM -> Libraries) ====================
     // Create reverse mapping for EVERY note with "first wins" priority
 
@@ -972,6 +1012,22 @@ DrumLibrary DrumLibraryManager::getRootFolderSourceLibrary(int index) const
     return DrumLibrary::Unknown;
 }
 
+bool DrumLibraryManager::isRootFolderWritable(int index) const
+{
+    if (index >= 0 && index < static_cast<int>(rootFolders.size()))
+        return rootFolders[index].isWritable;
+    return false;  // Default to read-only if invalid index
+}
+
+void DrumLibraryManager::setRootFolderWritable(int index, bool writable)
+{
+    if (index >= 0 && index < static_cast<int>(rootFolders.size()))
+    {
+        rootFolders[index].isWritable = writable;
+        saveConfiguration();  // Save immediately when changed
+    }
+}
+
 bool DrumLibraryManager::isFolderAlreadyAdded(const juce::File& folder) const
 {
     for (const auto& folderInfo : rootFolders)
@@ -1068,6 +1124,7 @@ void DrumLibraryManager::loadConfiguration()
                     FolderInfo info;
                     info.folder = folder;
                     info.sourceLibrary = static_cast<DrumLibrary>(sourceLib);
+                    info.isWritable = folderElement->getBoolAttribute("isWritable", false);
                     rootFolders.push_back(info);
 
                     DBG("Loaded root folder: " + folder.getFileName() + " (" + path + ")");
@@ -1100,6 +1157,7 @@ void DrumLibraryManager::saveConfiguration()
         auto* folderElement = foldersElement->createNewChildElement("Folder");
         folderElement->setAttribute("path", folderInfo.folder.getFullPathName());
         folderElement->setAttribute("sourceLibrary", static_cast<int>(folderInfo.sourceLibrary));
+        folderElement->setAttribute("isWritable", folderInfo.isWritable);
     }
 
     // Save last selected target library
@@ -1137,7 +1195,7 @@ juce::StringArray DrumLibraryManager::getLoadedLibraryNames()
 
     // Check built-in libraries (indices 0-16 = enums 2-18)
     // Skip index 0 (General MIDI) since we already added it
-    for (int libIdx = 1; libIdx < 17; ++libIdx)
+    for (int libIdx = 1; libIdx < 18; ++libIdx)
     {
         // Check if this library has any mappings
         bool hasMapping = false;
@@ -1219,8 +1277,56 @@ juce::String DrumLibraryManager::getLibraryName(DrumLibrary library)
         case DrumLibrary::MLDrums: return "ML Drums";
         case DrumLibrary::SalamanderDrumkit: return "Salamander Drumkit";
         case DrumLibrary::MuldjordKit3: return "MuldjordKit";
+        case DrumLibrary::Aasimonster2: return "The Aasimonster";
         default: return "Unknown";
     }
+}
+
+bool DrumLibraryManager::hasValidMapping(DrumPartType part, DrumLibrary library) const
+{
+    // Get the origin note number for this part
+    int originNote = getNoteNumberForDrumPart(part, library);
+
+    if (originNote <= 0 || originNote >= 128)
+        return false;
+
+    // For General MIDI, all standard parts are valid
+    if (library == DrumLibrary::GeneralMIDI)
+        return true;
+
+    // For origin libraries, check if this note has a valid description
+    int libIndex = static_cast<int>(library) - 2;
+
+    // First, find what GM note this origin note maps to
+    uint8_t gmNote = originNote;  // Default
+    if (libIndex >= 0 && mappings.find(libIndex) != mappings.end())
+    {
+        const auto& libMappings = mappings.at(libIndex);
+        if (libMappings.find(0) != libMappings.end())  // 0 = GM
+        {
+            const auto& originToGM = libMappings.at(0);
+            if (originToGM.find(originNote) != originToGM.end())
+            {
+                gmNote = originToGM.at(originNote);
+            }
+        }
+    }
+
+    // Check if there's a custom description for this GM note
+    if (libIndex >= 0 && customDrumNames.find(libIndex) != customDrumNames.end())
+    {
+        const auto& libCustomNames = customDrumNames.at(libIndex);
+        if (libCustomNames.find(gmNote) != libCustomNames.end())
+        {
+            juce::String customName = libCustomNames.at(gmNote);
+            if (customName.isNotEmpty())
+                return true;  // Has custom description
+        }
+    }
+
+    // No custom name, check if GM has a name for this note
+    juce::String gmName = getGMDrumName(gmNote);
+    return gmName.isNotEmpty();  // Valid if GM recognizes it
 }
 
 juce::String DrumLibraryManager::getLibraryNameIncludingCustom(DrumLibrary library) const
@@ -1264,7 +1370,7 @@ juce::String DrumLibraryManager::getGMDrumName(uint8_t note)
     };
 
     auto it = gmDrumNames.find(note);
-    return it != gmDrumNames.end() ? it->second : juce::String(note);
+    return it != gmDrumNames.end() ? it->second : "";
 }
 
 juce::StringArray DrumLibraryManager::getAllLibraryNames()
@@ -1279,6 +1385,7 @@ juce::StringArray DrumLibraryManager::getAllLibraryNames()
 
     // Collect other built-in libraries
     juce::StringArray otherLibraries;
+    otherLibraries.add(getLibraryName(DrumLibrary::Aasimonster2));
     otherLibraries.add(getLibraryName(DrumLibrary::AddictiveDrums2));
     otherLibraries.add(getLibraryName(DrumLibrary::BFD3));
     otherLibraries.add(getLibraryName(DrumLibrary::Damage2));
@@ -1354,6 +1461,7 @@ DrumLibrary DrumLibraryManager::getLibraryFromName(const juce::String& name)
     if (name == "ML Drums") return DrumLibrary::MLDrums;
     if (name == "Salamander Drumkit") return DrumLibrary::SalamanderDrumkit;
     if (name == "MuldjordKit") return DrumLibrary::MuldjordKit3;
+    if (name == "The Aasimonster") return DrumLibrary::Aasimonster2;
 
     // Check custom libraries
     for (const auto& custom : customLibraries)
@@ -1778,6 +1886,7 @@ void DrumLibraryManager::loadOriginLibraries()
         configuredOriginLibraries.add("Sitala");
         configuredOriginLibraries.add("Steven Slate Drums");
         configuredOriginLibraries.add("Superior Drummer 3");
+        configuredOriginLibraries.add("The Aasimonster");
         configuredOriginLibraries.add("Ugritone");
         configuredOriginLibraries.add("Unknown");
 
@@ -2267,4 +2376,154 @@ std::map<uint8_t, uint8_t> DrumLibraryManager::getOriginLibraryMappings(DrumLibr
     }
 
     return result;
+}
+
+int DrumLibraryManager::getNoteNumberForDrumPart(DrumPartType part, DrumLibrary library) const
+{
+    if (library == DrumLibrary::Unknown || library == DrumLibrary::Bypass)
+        return -1;
+
+    // For General MIDI, use standard note numbers
+    if (library == DrumLibrary::GeneralMIDI)
+    {
+        for (int note = 35; note <= 81; ++note)
+        {
+            if (MidiDissector::getPartTypeFromNote(note, library) == part)
+                return note;
+        }
+    }
+    else
+    {
+        // For origin libraries, search the mappings
+        int libIndex = static_cast<int>(library) - 2;
+
+        if (mappings.find(libIndex) != mappings.end())
+        {
+            const auto& libMappings = mappings.at(libIndex);
+            if (libMappings.find(0) != libMappings.end())
+            {
+                const auto& originToGM = libMappings.at(0);
+
+                // Search all origin notes
+                for (const auto& [originNote, gmNote] : originToGM)
+                {
+                    // IMPORTANT: Check if this GM note has a valid name (either custom or GM standard)
+                    bool hasValidName = false;
+
+                    // Check custom name first
+                    if (customDrumNames.find(libIndex) != customDrumNames.end())
+                    {
+                        const auto& libCustomNames = customDrumNames.at(libIndex);
+                        if (libCustomNames.find(gmNote) != libCustomNames.end())
+                        {
+                            if (libCustomNames.at(gmNote).isNotEmpty())
+                                hasValidName = true;
+                        }
+                    }
+
+                    // Check GM name if no custom name
+                    if (!hasValidName)
+                    {
+                        juce::String gmName = getGMDrumName(gmNote);
+                        hasValidName = gmName.isNotEmpty();
+                    }
+
+                    // Skip notes without valid names
+                    if (!hasValidName)
+                        continue;
+
+                    // Now check if this is the drum part we're looking for
+                    DrumPartType gmPartType = MidiDissector::getPartTypeFromNote(gmNote, DrumLibrary::GeneralMIDI);
+                    if (gmPartType == part)
+                    {
+                        return originNote;
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback
+    switch (part)
+    {
+        case DrumPartType::Kick: return 36;
+        case DrumPartType::Snare: return 38;
+        case DrumPartType::HiHatClosed: return 42;
+        case DrumPartType::HiHatOpen: return 46;
+        case DrumPartType::Crash: return 49;
+        case DrumPartType::Ride: return 51;
+        case DrumPartType::Tom1: return 48;
+        case DrumPartType::Tom2: return 45;
+        case DrumPartType::Tom3: return 43;
+        case DrumPartType::FloorTom: return 41;
+        case DrumPartType::Cowbell: return 56;
+        case DrumPartType::Clap: return 39;
+        case DrumPartType::Shaker: return 70;
+        default: return 60;
+    }
+}
+
+juce::String DrumLibraryManager::getDrumPartName(DrumPartType part, DrumLibrary library) const
+{
+    // Get the first origin note number for this drum part in this library
+    int originNoteNumber = getNoteNumberForDrumPart(part, library);
+
+    if (originNoteNumber <= 0 || originNoteNumber >= 128)
+    {
+        // Fallback to generic name
+        switch (part)
+        {
+            case DrumPartType::Kick: return "Kick";
+            case DrumPartType::Snare: return "Snare";
+            case DrumPartType::HiHatClosed: return "Hi-Hat (Closed)";
+            case DrumPartType::HiHatOpen: return "Hi-Hat (Open)";
+            case DrumPartType::Crash: return "Crash";
+            case DrumPartType::Ride: return "Ride";
+            case DrumPartType::Tom1: return "Tom 1";
+            case DrumPartType::Tom2: return "Tom 2";
+            case DrumPartType::Tom3: return "Tom 3";
+            case DrumPartType::FloorTom: return "Floor Tom";
+            case DrumPartType::Cowbell: return "Cowbell";
+            case DrumPartType::Clap: return "Clap";
+            case DrumPartType::Shaker: return "Shaker";
+            case DrumPartType::Other: return "Other";
+            default: return "Unknown";
+        }
+    }
+
+    // Now map origin note to GM note to look up custom name
+    int libIndex = static_cast<int>(library) - 2;  // Offset: enums start at 2
+    uint8_t gmNote = originNoteNumber;  // Default to same note
+
+    // Look up the GM note this origin note maps to
+    if (libIndex >= 0 && mappings.find(libIndex) != mappings.end())
+    {
+        const auto& libMappings = mappings.at(libIndex);
+        if (libMappings.find(0) != libMappings.end())  // 0 = GM
+        {
+            const auto& originToGM = libMappings.at(0);
+            if (originToGM.find(originNoteNumber) != originToGM.end())
+            {
+                gmNote = originToGM.at(originNoteNumber);
+            }
+        }
+    }
+
+    // Check for custom name stored for this library and GM note
+    if (libIndex >= 0 && customDrumNames.find(libIndex) != customDrumNames.end())
+    {
+        const auto& libCustomNames = customDrumNames.at(libIndex);
+        if (libCustomNames.find(gmNote) != libCustomNames.end())
+        {
+            juce::String customName = libCustomNames.at(gmNote);
+            if (customName.isNotEmpty())
+            {
+                // Found custom name in XML!
+                return customName;
+            }
+        }
+    }
+
+    // No custom name found, use General MIDI descriptive name
+    return getGMDrumName(gmNote);
 }

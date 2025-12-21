@@ -1,8 +1,9 @@
 #include "DrumLibraryMappingEditor.h"
 #include "DrumGrooveLookAndFeel.h"
+#include "PluginProcessor.h"
 
-DrumLibraryMappingEditor::DrumLibraryMappingEditor(DrumLibraryManager& manager)
-: drumLibraryManager(manager)
+DrumLibraryMappingEditor::DrumLibraryMappingEditor(DrumLibraryManager& manager, DrumGrooveProcessor* proc)
+: drumLibraryManager(manager), processor(proc)
 {
     auto& lnf = DrumGrooveLookAndFeel::getInstance();
 
@@ -165,7 +166,8 @@ bool DrumLibraryMappingEditor::isProtectedLibrary(const juce::String& libraryNam
     return libraryName == "General MIDI" ||
     libraryName == "Bypass (No Remapping)" ||
     libraryName == "Salamander Drumkit" ||
-    libraryName == "MuldjordKit";
+    libraryName == "MuldjordKit" ||
+    libraryName == "The Aasimonster";
 }
 
 void DrumLibraryMappingEditor::paint(juce::Graphics& g)
@@ -419,6 +421,16 @@ void DrumLibraryMappingEditor::updateMappingsForSelectedProduct()
                 showEditMappingDialog(row);
             };
         }
+
+        // ADD PLAY CALLBACK (for ALL rows, even read-only)
+        row->onPlay = [this, targetNote = pm.targetNote]()
+        {
+            if (processor)
+            {
+                // Play target note directly (no remapping)
+                processor->triggerPreviewNote(targetNote, 100);
+            }
+        };
     }
 
     resized();
@@ -662,6 +674,31 @@ void DrumLibraryMappingEditor::commitChanges()
 
         DBG("Updating mappings for target: " + libName + " (" + juce::String(mappings.size()) + " mappings)");
 
+        // CRITICAL FIX: Get existing mappings and remove any that are not in working copy
+        auto existingMappings = drumLibraryManager.getExplicitMappingsForLibrary(lib);
+        for (const auto& [gmNote, targetNote] : existingMappings)
+        {
+            // Check if this mapping still exists in working copy
+            bool stillExists = false;
+            for (const auto& pm : mappings)
+            {
+                if (pm.gmNote == gmNote)
+                {
+                    stillExists = true;
+                    break;
+                }
+            }
+
+            // If not in working copy, remove it
+            if (!stillExists)
+            {
+                DBG("Removing deleted mapping: GM " + juce::String(gmNote));
+                drumLibraryManager.removeMappingForNote(lib, gmNote);
+                drumLibraryManager.clearCustomDrumName(lib, gmNote);
+            }
+        }
+
+        // Now update/add all mappings from working copy
         for (const auto& pm : mappings)
         {
             drumLibraryManager.updateLibraryMapping(lib, pm.gmNote, pm.targetNote);
@@ -681,6 +718,9 @@ void DrumLibraryMappingEditor::commitChanges()
 
     if (onLibrariesChanged)
         onLibrariesChanged();
+
+    pendingAddedLibraries.clear();
+    pendingDeletedLibraries.clear();
 
     DBG("=== Target Library Changes Committed ===");
 }
@@ -791,15 +831,15 @@ void DrumLibraryMappingEditor::pasteFromClipboard()
         "Import Complete", message);
 }
 
-void DrumLibraryMappingEditor::showEditor(DrumLibraryManager& manager, juce::Component* parent,
+void DrumLibraryMappingEditor::showEditor(DrumLibraryManager& manager, DrumGrooveProcessor* processor, juce::Component* parent,
                                           std::function<void()> onLibrariesChangedCallback)
 {
-    auto* editor = new DrumLibraryMappingEditor(manager);
+    auto* editor = new DrumLibraryMappingEditor(manager, processor);
     editor->onLibrariesChanged = onLibrariesChangedCallback;
 
     juce::DialogWindow::LaunchOptions options;
     options.content.setOwned(editor);
-    options.dialogTitle = "Target Drum Library Manager";
+    options.dialogTitle = "Target MIDI Library Mapping Editor";
     options.dialogBackgroundColour = ColourPalette::mainBackground;
     options.escapeKeyTriggersCloseButton = true;
     options.useNativeTitleBar = false;
@@ -861,6 +901,12 @@ DrumLibraryMappingEditor::NoteMappingRow::NoteMappingRow(uint8_t gm, uint8_t tar
     editButton.setVisible(!readOnly);  // Hide for protected libraries
     addAndMakeVisible(editButton);
 
+    // ADD PLAY BUTTON
+    playButton.setButtonText("Play");
+    playButton.setTooltip("Preview this target sound");
+    playButton.addListener(this);
+    addAndMakeVisible(playButton);
+
     // Load icons
     juce::File pluginFile = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
     juce::File resourcesPath;
@@ -921,6 +967,11 @@ void DrumLibraryMappingEditor::NoteMappingRow::buttonClicked(juce::Button* butto
         if (onEdit)
             onEdit();
     }
+    else if (button == &playButton)
+    {
+        if (onPlay)
+            onPlay();
+    }
 }
 
 void DrumLibraryMappingEditor::NoteMappingRow::paint(juce::Graphics& g)
@@ -945,7 +996,7 @@ void DrumLibraryMappingEditor::NoteMappingRow::resized()
 {
     auto bounds = getLocalBounds().reduced(5, 0);
 
-    // Layout: GM Note | Description | Arrow | Target Note | Edit | Delete
+    // Layout: GM Note | Description | Arrow | Target Note | Play | Edit | Delete
     gmNoteLabel.setBounds(bounds.removeFromLeft(50));
     bounds.removeFromLeft(5);
     gmNameLabel.setBounds(bounds.removeFromLeft(180));
@@ -960,5 +1011,10 @@ void DrumLibraryMappingEditor::NoteMappingRow::resized()
         deleteButton.setBounds(bounds.removeFromRight(30));
         bounds.removeFromRight(5);
         editButton.setBounds(bounds.removeFromRight(40));
+        bounds.removeFromRight(5);
     }
+
+    playButton.setBounds(bounds.removeFromRight(50));
 }
+
+

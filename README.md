@@ -4,6 +4,8 @@
 
 ![DrumGroovePro Interface](images/plugin-interface.png)
 
+![DrumGroovePro Sampler](images/midi-editor.png)
+
 ![DrumGroovePro Sampler](images/sampler.png)
 ---
 
@@ -45,14 +47,10 @@ DrumGroovePro is a MIDI drum groove workstation designed for producers, composer
 Access the built-in audio engine via the Samples Manager window:
 
 #### **Audio Playback Section**
-- **Load Samples**: Download and load drum sample libraries (SFZ and DrumGizmo formats)
+- **Load Samples**: Download and load drum sample libraries (The Aasimonster, MuldjordKit & Salamander Drumkit available)
 - **MIDI/Audio Mode Toggle**: Switch between:
   - **MIDI Out** (blue): Outputs MIDI notes to your DAW/drum plugin
   - **Audio Out** (orange): Plays samples directly through the built-in mixer
-
-#### **Supported Sample Library Formats**
-- **SFZ Format**: Standard SFZ format with ALL.sfz file
-- **DrumGizmo Format**: XML-based format with KitName.xml and Midimap.xml
 
 #### **Humanization Section**
 Make your drum patterns sound more natural with three humanization controls:
@@ -124,7 +122,6 @@ The **Altern** toggle on Kick 1 prevents the "machine gun" effect on rapid kick 
 Insert audio files as reference tracks for:
 - Matching your drum arrangement to an existing song
 - A/B comparison with professional mixes
-- Creating drum covers by playing along with the original
 
 **Supported formats**: WAV, MP3, FLAC, OGG, AIFF
 
@@ -169,7 +166,7 @@ Insert audio files as reference tracks for:
 - Controlled via Latency field in timeline controls
 
 ###  **Drum Remapping**
-- **17 Supported Libraries "Out of the box"**:
+- **17 Supported Libraries** (Mapping where made using public available information, please check with your vendor)
 - Addictive Drums 2
 - BFD3
 - Damage 2
@@ -248,6 +245,35 @@ Set target library to "Bypass" to preserve original note mappings in all operati
 - **Save/Load Timeline State**: Save complete timeline arrangements with all tracks, clips, and BPM settings
 - **Persistent Temporary Files**: Dissected drum parts are automatically saved with your project
 - **Audio Track Support**: Audio reference tracks are saved and restored with your project
+
+###  **MIDI Editor**
+Edit and create MIDI drum patterns directly in DrumGroovePro:
+
+**Opening Files:**
+- Double-click any MIDI file in timeline to open the editor or right click --> Edit midi in the GrooveBrowser
+- Create new patterns via File → "Create New MIDI"
+
+**Editor Features:**
+- **Piano Roll Grid**: Visual note editor with drum part labels
+- **Tool Selection**: Pencil (add notes), Eraser (delete), Select (move/edit)
+- **Grid Resolution**: Snap notes to 1/4, 1/8, 1/16, 1/32, 1/64, 1/128, triplets
+- **Velocity Lane**: Visual velocity editing with color-coded drum parts
+- **Loop Region**: Set loop points for focused editing
+- **Zoom Controls**: Horizontal zoom slider + mouse wheel for detailed editing
+- **Quantize**: Snap selected notes to grid
+- **Real-time Playback**: Preview your edits with latency-compensated playback
+- **Save/Save As**: Save edits or create copies (protected folders only allow "Save As")
+
+**Read-Only Protection:**
+- Files from protected folders (isWritable=0 in config.xml) open in read-only mode (New option when addind a new MIDI folder)
+- All editing controls disabled except "Save As"
+- Create editable copies in writable locations
+
+
+#### Batch remapping
+- Click on **Batch Remap** button to select a origin midi folder/file and a target.
+- Select the **Origin** and **Target Library** Mapping.
+- Click on **Convert** and the midi will be saved in the target with the notes re-arranged.
 
 ---
 
@@ -340,9 +366,9 @@ Set target library to "Bypass" to preserve original note mappings in all operati
 ### **Browse Your Library**
 
 1. Navigate through folders using the **Miller Columns browser** (center)
-2. **Click** on a MIDI file to preview it
-3. **Double-click** to dissect it into drum parts (Kick, Snare, Hi-Hat, etc.)
-4. **Click** on individual drum parts to preview them
+2. **Double Click** on a MIDI file to preview it
+3. **Click** to dissect it into drum parts (Kick, Snare, Hi-Hat, etc.)
+4. **Double Click** on individual drum parts to preview them
 
 ---
 
@@ -605,16 +631,6 @@ DrumGroovePro/
 ```
 
 ---
-
-## Contributing
-
-Contributions are welcome! If you'd like to contribute:
-
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
 
 ### Reporting Issues
 

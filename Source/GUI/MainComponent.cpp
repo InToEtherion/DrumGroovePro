@@ -380,24 +380,33 @@ MainComponent::GuiState MainComponent::saveGuiState() const
 
 void MainComponent::restoreGuiState(const GuiState& state)
 {
-    // Validate the state before applying
     if (!state.isValid())
+    {
+        DBG("=== MainComponent::restoreGuiState - INVALID STATE ===");
         return;
+    }
 
-    // Restore browser navigation
+    DBG("=== MainComponent::restoreGuiState ===");
+    DBG("Current Folder: " + state.currentBrowserFolder.getFullPathName());
+    DBG("Selected File: " + state.selectedFile.getFullPathName());
+    DBG("Nav Path Count: " + juce::String(state.browserNavigationPath.size()));
+
     if (grooveBrowser && state.currentBrowserFolder.exists())
     {
+        DBG("Calling grooveBrowser->restoreNavigationState...");
         grooveBrowser->restoreNavigationState(state.currentBrowserFolder, state.browserNavigationPath);
     }
-
-    // Restore selected file display
-    if (filePathDisplay && state.selectedFile.exists())
+    else
     {
-        filePathDisplay->setFilePath(state.selectedFile);
+        DBG(juce::String("grooveBrowser exists: ") + (grooveBrowser ? "yes" : "no"));
+        DBG(juce::String("currentBrowserFolder exists: ") + (state.currentBrowserFolder.exists() ? "yes" : "no"));
     }
 
-    // Note: MultiTrackContainer state is restored separately in PluginEditor
-    // to ensure proper timing and component initialization
+    if (filePathDisplay && state.selectedFile.exists())
+    {
+        DBG("Setting file path display...");
+        filePathDisplay->setFilePath(state.selectedFile);
+    }
 }
 
 void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
@@ -414,5 +423,13 @@ void MainComponent::changeListenerCallback(juce::ChangeBroadcaster* source)
             timelineControls->setLoopStartTime(startTime);
             timelineControls->setLoopEndTime(endTime);
         }
+    }
+}
+
+void MainComponent::mouseDown(const juce::MouseEvent& e)
+{
+    if (multiTrackContainer && multiTrackContainer->getBounds().contains(e.getPosition()))
+    {
+        multiTrackContainer->grabKeyboardFocus();
     }
 }

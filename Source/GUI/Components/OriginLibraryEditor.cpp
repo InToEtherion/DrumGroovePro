@@ -1,10 +1,11 @@
 #include "OriginLibraryEditor.h"
 #include "DrumGrooveLookAndFeel.h"
 #include "GrooveBrowser.h"
+#include "PluginProcessor.h"
 
 
-OriginLibraryEditor::OriginLibraryEditor(DrumLibraryManager& manager)
-: drumLibraryManager(manager)
+OriginLibraryEditor::OriginLibraryEditor(DrumLibraryManager& manager, DrumGrooveProcessor* proc)
+: drumLibraryManager(manager), processor(proc)
 {
     auto& lnf = DrumGrooveLookAndFeel::getInstance();
 
@@ -439,6 +440,16 @@ void OriginLibraryEditor::updateMappingsForSelectedOrigin()
                 showEditMappingDialog(row);
             };
         }
+
+        // ADD PLAY CALLBACK (for ALL rows, even read-only)
+        row->onPlay = [this, originNote = pm.originNote]()
+        {
+            if (processor)
+            {
+                // Play origin note (will be remapped automatically by processor)
+                processor->triggerPreviewNote(originNote, 100);
+            }
+        };
     }
 
     resized();
@@ -762,6 +773,31 @@ void OriginLibraryEditor::commitChanges()
 
         DBG("Updating mappings for origin: " + libName + " (" + juce::String(mappings.size()) + " mappings)");
 
+        // CRITICAL FIX: Get existing mappings and remove any that are not in working copy
+        auto existingMappings = drumLibraryManager.getOriginLibraryMappings(lib);
+        for (const auto& [gmNote, originNote] : existingMappings)
+        {
+            // Check if this mapping still exists in working copy
+            bool stillExists = false;
+            for (const auto& pm : mappings)
+            {
+                if (pm.gmNote == gmNote)
+                {
+                    stillExists = true;
+                    break;
+                }
+            }
+
+            // If not in working copy, remove it
+            if (!stillExists)
+            {
+                DBG("Removing deleted mapping: GM " + juce::String(gmNote));
+                drumLibraryManager.removeMappingForNote(lib, gmNote);
+                drumLibraryManager.clearCustomDrumName(lib, gmNote);
+            }
+        }
+
+        // Now update/add all mappings from working copy
         for (const auto& pm : mappings)
         {
             drumLibraryManager.updateLibraryMapping(lib, pm.gmNote, pm.originNote);
@@ -902,9 +938,9 @@ void OriginLibraryEditor::pasteFromClipboard()
         "Import Complete", message);
 }
 
-void OriginLibraryEditor::showEditor(DrumLibraryManager& manager, juce::Component* parent, std::function<void()> onLibrariesChanged)
+void OriginLibraryEditor::showEditor(DrumLibraryManager& manager, DrumGrooveProcessor* processor, juce::Component* parent, std::function<void()> onLibrariesChanged)
 {
-    auto* editor = new OriginLibraryEditor(manager);
+    auto* editor = new OriginLibraryEditor(manager, processor);
     editor->onLibrariesChanged = onLibrariesChanged;
 
     juce::DialogWindow::LaunchOptions options;
@@ -964,6 +1000,11 @@ OriginLibraryEditor::MappingRow::MappingRow(uint8_t originNote, uint8_t gmNote,
     drumNameLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(drumNameLabel);
 
+    playButton.setButtonText("Play");
+    playButton.setTooltip("Preview this drum sound");
+    playButton.addListener(this);
+    addAndMakeVisible(playButton);
+
     editButton.setButtonText("Edit");
     editButton.setTooltip("Edit this mapping");
     editButton.addListener(this);
@@ -1020,16 +1061,12 @@ OriginLibraryEditor::MappingRow::~MappingRow()
 
 void OriginLibraryEditor::MappingRow::buttonClicked(juce::Button* button)
 {
-    if (button == &deleteButton)
-    {
-        if (onDelete)
-            onDelete();
-    }
-    else if (button == &editButton)
-    {
-        if (onEdit)
-            onEdit();
-    }
+    if (button == &editButton && onEdit)
+        onEdit();
+    else if (button == &deleteButton && onDelete)
+        onDelete();
+    else if (button == &playButton && onPlay)
+        onPlay();
 }
 
 void OriginLibraryEditor::MappingRow::paint(juce::Graphics& g)
@@ -1052,20 +1089,28 @@ void OriginLibraryEditor::MappingRow::paint(juce::Graphics& g)
 
 void OriginLibraryEditor::MappingRow::resized()
 {
-    auto bounds = getLocalBounds().reduced(5, 0);
+    auto bounds = getLocalBounds().reduced(5, 2);
 
-    // Layout: Origin Note | Arrow | GM Note | Description | Edit | Delete
-    originNoteLabel.setBounds(bounds.removeFromLeft(50));
-    bounds.removeFromLeft(5);
-    arrowLabel.setBounds(bounds.removeFromLeft(30));
-    bounds.removeFromLeft(5);
-    gmNoteLabel.setBounds(bounds.removeFromLeft(50));
+    int labelWidth = 60;
+    int arrowWidth = 30;
+    int buttonWidth = 60;
+    int playWidth = 50;  // CHANGE THIS from 35 or 40 to 50
+
+    originNoteLabel.setBounds(bounds.removeFromLeft(labelWidth));
+    arrowLabel.setBounds(bounds.removeFromLeft(arrowWidth));
+    gmNoteLabel.setBounds(bounds.removeFromLeft(labelWidth));
+
+    bounds.removeFromLeft(10);  // Spacing
+
+    if (!isReadOnly)
+    {
+        deleteButton.setBounds(bounds.removeFromRight(buttonWidth).reduced(5, 0));
+        editButton.setBounds(bounds.removeFromRight(buttonWidth).reduced(5, 0));
+    }
+
+    // Play button (before edit/delete buttons)
+    playButton.setBounds(bounds.removeFromRight(playWidth).reduced(5, 0));
+
     bounds.removeFromLeft(10);
-
-    deleteButton.setBounds(bounds.removeFromRight(30));
-    bounds.removeFromRight(5);
-    editButton.setBounds(bounds.removeFromRight(40));
-    bounds.removeFromRight(10);
-
     drumNameLabel.setBounds(bounds);
 }

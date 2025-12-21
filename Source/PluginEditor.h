@@ -5,6 +5,9 @@
 #include "PluginProcessor.h"
 #include "GUI/MainComponent.h"
 
+// Forward declaration
+class MidiEditorComponent;
+
 class DrumGrooveEditor : public juce::AudioProcessorEditor,
                          public juce::DragAndDropContainer,
                          private juce::Timer
@@ -30,6 +33,9 @@ class DrumGrooveEditor : public juce::AudioProcessorEditor,
         void visibilityChanged() override;
 		
 		MainComponent* getMainComponent() const { return mainComponent.get(); }
+
+		void openMidiEditor(const juce::File& midiFile, DrumLibrary sourceLib);
+        void createNewMidiGroove();
 	
 
     private:
@@ -61,6 +67,8 @@ class DrumGrooveEditor : public juce::AudioProcessorEditor,
         // Window management helpers
         bool isPositionOnScreen(int x, int y) const;
         juce::Rectangle<int> getValidWindowBounds(int x, int y, int width, int height) const;
+
+        juce::OwnedArray<MidiEditorComponent> activeEditors;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(DrumGrooveEditor)
     };

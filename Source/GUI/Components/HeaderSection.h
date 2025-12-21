@@ -2,6 +2,7 @@
 
 #include <juce_gui_basics/juce_gui_basics.h>
 #include <juce_audio_processors/juce_audio_processors.h>
+#include "BatchRemapDialog.h"
 
 // Forward declarations
 class DrumGrooveProcessor;
@@ -44,6 +45,10 @@ public juce::Button::Listener,
             juce::Label manualBPMLabel;
             juce::Slider manualBPMSlider;
             juce::Label currentBPMLabel;
+
+            juce::TextButton createNewGrooveButton;
+
+            juce::TextButton batchRemapButton;
 
             // Parameter attachments
             std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> syncAttachment;

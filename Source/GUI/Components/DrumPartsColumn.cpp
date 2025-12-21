@@ -84,6 +84,8 @@ DrumPartsColumn::DrumPartsColumn(DrumGrooveProcessor& p, const juce::String& col
     scrollbar.setColour(juce::ScrollBar::thumbColourId, juce::Colours::grey);
     scrollbar.setColour(juce::ScrollBar::trackColourId, juce::Colours::darkgrey);
     scrollbar.setColour(juce::ScrollBar::backgroundColourId, ColourPalette::secondaryBackground);
+
+    startTimerHz(10);
 }
 
 DrumPartsColumn::~DrumPartsColumn()
@@ -92,6 +94,7 @@ DrumPartsColumn::~DrumPartsColumn()
     {
         lastTempFile.deleteFile();
     }
+    stopTimer();
 }
 
 void DrumPartsColumn::resized()
@@ -427,27 +430,133 @@ void DrumPartsColumn::playPart(const DrumPart& part)
         }
         lastTempFile = tempFile;
 
-        // Get current BPM settings
-        double bpm = 120.0;
+        // ====================================================================
+        // FIX: Get current BPM from header (respects Sync to Host setting)
+        // ====================================================================
+        double currentBPM = 120.0;
         bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
 
         if (syncToHost)
         {
-            bpm = processor.getHostBPM();
+            currentBPM = processor.getHostBPM();
         }
         else
         {
-            bpm = processor.parameters.getRawParameterValue("manualBPM")->load();
+            currentBPM = processor.parameters.getRawParameterValue("manualBPM")->load();
         }
 
+        // ====================================================================
+        // FIX: Calculate actual duration from the MIDI file
+        // ====================================================================
+        double actualDuration = 1.0; // Default fallback for drum parts
+
+        juce::MidiFile midiFile;
+        juce::FileInputStream stream(tempFile);
+        if (midiFile.readFrom(stream))
+        {
+            double ticksPerQuarterNote = midiFile.getTimeFormat();
+            if (ticksPerQuarterNote <= 0)
+                ticksPerQuarterNote = 480.0;
+
+            // Read BPM and time signature from file
+            double fileBPM = 120.0;
+            int timeSignatureNumerator = 4;
+            int timeSignatureDenominator = 4;
+
+            for (int t = 0; t < midiFile.getNumTracks(); ++t)
+            {
+                auto* track = const_cast<juce::MidiMessageSequence*>(midiFile.getTrack(t));
+                if (!track) continue;
+
+                for (int e = 0; e < track->getNumEvents(); ++e)
+                {
+                    const auto* event = track->getEventPointer(e);
+                    if (!event) continue;
+
+                    if (event->message.isTempoMetaEvent())
+                    {
+                        fileBPM = 60.0 / event->message.getTempoSecondsPerQuarterNote();
+                    }
+                    else if (event->message.isTimeSignatureMetaEvent())
+                    {
+                        event->message.getTimeSignatureInfo(timeSignatureNumerator,
+                                                            timeSignatureDenominator);
+                    }
+                }
+            }
+
+            // Find max time across all tracks
+            double maxTimeInTicks = 0;
+            for (int t = 0; t < midiFile.getNumTracks(); ++t)
+            {
+                auto* track = const_cast<juce::MidiMessageSequence*>(midiFile.getTrack(t));
+                if (!track) continue;
+
+                track->updateMatchedPairs();
+
+                for (int e = 0; e < track->getNumEvents(); ++e)
+                {
+                    double eventTime = track->getEventTime(e);
+                    maxTimeInTicks = juce::jmax(maxTimeInTicks, eventTime);
+
+                    // Check note-off times
+                    auto* eventHolder = track->getEventPointer(e);
+                    if (eventHolder && eventHolder->noteOffObject != nullptr)
+                    {
+                        double noteOffTime = eventHolder->noteOffObject->message.getTimeStamp();
+                        maxTimeInTicks = juce::jmax(maxTimeInTicks, noteOffTime);
+                    }
+                }
+            }
+
+            // Round up to complete bars
+            double ticksPerBar = ticksPerQuarterNote * (4.0 / timeSignatureDenominator) * timeSignatureNumerator;
+            double numBars = std::ceil(maxTimeInTicks / ticksPerBar);
+            double roundedTicks = numBars * ticksPerBar;
+
+            // CRITICAL: Calculate duration at CURRENT BPM (from header), not file BPM
+            actualDuration = (roundedTicks / ticksPerQuarterNote) * (60.0 / currentBPM);
+            actualDuration = juce::jmax(0.1, actualDuration);
+
+            // Store for loop recalculation
+            currentPlaybackMidiTicks = roundedTicks;
+            currentPlaybackTPQN = ticksPerQuarterNote;
+
+            actualDuration = juce::jmax(0.5, actualDuration); // Minimum 0.5 seconds
+
+            DBG("Part duration calculated: " + juce::String(actualDuration, 3) +
+            "s at " + juce::String(currentBPM, 2) + " BPM" +
+            " (ticks: " + juce::String(roundedTicks, 0) +
+            ", PPQN: " + juce::String(ticksPerQuarterNote, 0) + ")");
+        }
+
+        // Add clip with CALCULATED duration
         DrumLibrary targetLib = processor.getTargetLibrary();
-        processor.midiProcessor.addMidiClip(tempFile, 0.0, targetLib, bpm, bpm, 0, 10.0, "drumpart_preview_" + juce::Uuid().toString());  // Track 0
+        processor.midiProcessor.addMidiClip(tempFile, 0.0, targetLib, currentBPM, currentBPM, 0,
+                                            actualDuration,  // <-- USE CALCULATED DURATION
+                                            "drumpart_preview_" + juce::Uuid().toString());
+
+        // Enable looping for preview
+        processor.midiProcessor.setLoopRange(0.0, actualDuration);
+        processor.midiProcessor.setLoopEnabled(true);
+
         processor.midiProcessor.setPlayheadPosition(0.0);
+
+
+        // Start BPM monitoring timer
+        startTimerHz(10);
+
         processor.midiProcessor.play();
 
         DBG("Playing drum part: " + part.displayName + " with " +
-        juce::String(part.eventCount) + " events at " + juce::String(bpm, 2) + " BPM");
+        juce::String(part.eventCount) + " events at " + juce::String(currentBPM, 2) +
+        " BPM, duration: " + juce::String(actualDuration, 3) + "s");
     }
+    // After starting playback:
+    isPreviewPlaying = true;
+    currentPreviewDuration = actualDuration;
+    currentPreviewBPM = currentBPM;
+
 }
 
 void DrumPartsColumn::createTempMidiFile(const DrumPart& part, juce::File& tempFile)
@@ -563,6 +672,37 @@ void DrumPartsColumn::createTempMidiFile(const DrumPart& part, juce::File& tempF
 void DrumPartsColumn::stopPlayback()
 {
     processor.midiProcessor.stop();
+    isPreviewPlaying = false;
+    currentPreviewDuration = 0.0;
+    currentPreviewBPM = 120.0;
+    stopTimer();
+}
+
+void DrumPartsColumn::updatePreviewForBPMChange()
+{
+    if (!isPreviewPlaying)
+        return;
+
+    // Get new BPM
+    bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
+    double newBPM = syncToHost ? processor.getHostBPM() :
+    processor.parameters.getRawParameterValue("manualBPM")->load();
+
+    if (std::abs(newBPM - currentPreviewBPM) < 0.01)
+        return; // No significant change
+
+        // Recalculate duration based on new BPM
+        // Duration scales inversely with BPM
+        double newDuration = currentPreviewDuration * (currentPreviewBPM / newBPM);
+
+    // Update loop range
+    processor.midiProcessor.setLoopRange(0.0, newDuration);
+
+    currentPreviewBPM = newBPM;
+    currentPreviewDuration = newDuration;
+
+    DBG("Preview BPM changed to " + juce::String(newBPM, 2) +
+    " - New duration: " + juce::String(newDuration, 3) + "s");
 }
 
 // NEW: Handle right-click detection
@@ -942,4 +1082,63 @@ void DrumPartsColumn::startExternalDrag(int row)
         });
     });
 
+}
+
+void DrumPartsColumn::timerCallback()
+{
+    // Monitor BPM changes during playback
+    if (isPreviewPlaying && processor.midiProcessor.isPlaying())
+    {
+        double currentBPM = 120.0;
+        bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
+
+        if (syncToHost)
+        {
+            currentBPM = processor.getHostBPM();
+        }
+        else
+        {
+            currentBPM = processor.parameters.getRawParameterValue("manualBPM")->load();
+        }
+
+        // If BPM changed significantly
+        if (std::abs(currentBPM - lastKnownBPM) > 0.01)
+        {
+            processor.midiProcessor.updateTrackBPM(0, currentBPM);
+            lastKnownBPM = currentBPM;
+
+            // Update loop duration
+            updateLoopDurationForBPMChange();
+
+            DBG("DrumParts: BPM changed to " + juce::String(currentBPM, 2) + " BPM");
+        }
+    }
+}
+
+void DrumPartsColumn::updateLoopDurationForBPMChange()
+{
+    if (!isPreviewPlaying || currentPlaybackMidiTicks == 0.0)
+        return;
+
+    // Get current BPM
+    double headerBPM = 120.0;
+    bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
+
+    if (syncToHost)
+    {
+        headerBPM = processor.getHostBPM();
+    }
+    else
+    {
+        headerBPM = processor.parameters.getRawParameterValue("manualBPM")->load();
+    }
+
+    // Recalculate duration using stored MIDI ticks and current BPM
+    double newDurationInSeconds = (currentPlaybackMidiTicks / currentPlaybackTPQN) * (60.0 / headerBPM);
+    newDurationInSeconds = juce::jmax(0.1, newDurationInSeconds);
+
+    // Update loop range with new duration
+    processor.midiProcessor.setLoopRange(0.0, newDurationInSeconds);
+
+    DBG("DrumParts: Loop duration updated: " + juce::String(newDurationInSeconds, 3) + "s at " + juce::String(headerBPM, 2) + " BPM");
 }

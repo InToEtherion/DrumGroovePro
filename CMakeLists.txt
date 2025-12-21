@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(DrumGroovePro VERSION 0.9.9)
+project(DrumGroovePro VERSION 1.0.0)
 
 # C++20 standard
 set(CMAKE_CXX_STANDARD 20)
@@ -42,10 +42,16 @@ juce_generate_juce_header(DrumGroovePro)
 target_sources(DrumGroovePro PRIVATE
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
+    Source/EditableMidiClip.cpp
+    Source/MidiEditorToolbar.cpp
+    Source/DrumGridView.cpp
+    Source/MidiEditorComponent.cpp
     Source/GUI/MainComponent.cpp
     Source/GUI/SampleDownloadDialog.cpp
     Source/GUI/SamplesManagerWindow.cpp
     Source/GUI/EQPresetManager.cpp
+    Source/GUI/Components/BatchRemapDialog.h
+    Source/GUI/Components/BatchRemapDialog.cpp
     Source/GUI/Components/HeaderSection.cpp
     Source/GUI/Components/GrooveBrowser.cpp
     Source/GUI/Components/DrumPartsColumn.cpp
@@ -64,6 +70,7 @@ target_sources(DrumGroovePro PRIVATE
     Source/GUI/Components/OriginLibraryEditor.cpp
     Source/GUI/Components/AudioTrack.cpp
     Source/GUI/Components/AudioTrackHeader.cpp
+    Source/GUI/Components/VelocityLaneComponent.cpp
     Source/GUI/LookAndFeel/DrumGrooveLookAndFeel.cpp
     Source/Core/MidiProcessor.cpp
     Source/Core/MidiDissector.cpp
@@ -528,6 +535,4 @@ endif()
 
 message(STATUS "  Resource Source: ${CMAKE_SOURCE_DIR}/Resources")
 message(STATUS "  Version: ${PROJECT_VERSION}")
-message(STATUS "  NEW: 7-Channel Mixer with Background (v0.9.9)")
-message(STATUS "======================================================")
 message(STATUS "")

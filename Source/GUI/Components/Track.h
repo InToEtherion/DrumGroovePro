@@ -53,6 +53,8 @@ public juce::DragAndDropTarget,
         void mouseUp(const juce::MouseEvent& e) override;
         void mouseMove(const juce::MouseEvent& e) override;
 
+        void mouseDoubleClick(const juce::MouseEvent& event) override;
+
         // Keyboard handling for undo/redo
         bool keyPressed(const juce::KeyPress& key, juce::Component* originatingComponent) override;
 
