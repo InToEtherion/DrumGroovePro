@@ -519,7 +519,22 @@ bool MidiEditorComponent::saveClip()
     if (!currentFile.existsAsFile())
         return saveClipAs();
 
-    // Save to existing file
+    // CRITICAL FIX: Delete the existing file first to avoid corruption
+    // This ensures a clean write without file locking issues
+    if (currentFile.existsAsFile())
+    {
+        if (!currentFile.deleteFile())
+        {
+            juce::AlertWindow::showMessageBoxAsync(
+                juce::AlertWindow::WarningIcon,
+                "Save Error",
+                "Could not overwrite existing file. It may be locked by another process.\nPlease try 'Save As' instead.",
+                "OK");
+            return false;
+        }
+    }
+
+    // Save to file
     if (clip->saveToMidiFile(currentFile))
     {
         content->setUnsavedChanges(false);

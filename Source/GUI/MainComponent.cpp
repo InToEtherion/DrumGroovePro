@@ -381,30 +381,15 @@ MainComponent::GuiState MainComponent::saveGuiState() const
 void MainComponent::restoreGuiState(const GuiState& state)
 {
     if (!state.isValid())
-    {
-        DBG("=== MainComponent::restoreGuiState - INVALID STATE ===");
         return;
-    }
-
-    DBG("=== MainComponent::restoreGuiState ===");
-    DBG("Current Folder: " + state.currentBrowserFolder.getFullPathName());
-    DBG("Selected File: " + state.selectedFile.getFullPathName());
-    DBG("Nav Path Count: " + juce::String(state.browserNavigationPath.size()));
 
     if (grooveBrowser && state.currentBrowserFolder.exists())
     {
-        DBG("Calling grooveBrowser->restoreNavigationState...");
         grooveBrowser->restoreNavigationState(state.currentBrowserFolder, state.browserNavigationPath);
-    }
-    else
-    {
-        DBG(juce::String("grooveBrowser exists: ") + (grooveBrowser ? "yes" : "no"));
-        DBG(juce::String("currentBrowserFolder exists: ") + (state.currentBrowserFolder.exists() ? "yes" : "no"));
     }
 
     if (filePathDisplay && state.selectedFile.exists())
     {
-        DBG("Setting file path display...");
         filePathDisplay->setFilePath(state.selectedFile);
     }
 }

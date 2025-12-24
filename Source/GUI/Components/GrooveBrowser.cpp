@@ -1397,23 +1397,34 @@ void GrooveBrowser::timerCallback()
 void GrooveBrowser::restoreNavigationState(const juce::File& currentFolder,
                                            const juce::Array<juce::File>& navPath)
 {
-    DBG("=== GrooveBrowser::restoreNavigationState ===");
-    DBG("Current Folder: " + currentFolder.getFullPathName());
-    DBG("Nav Path Count: " + juce::String(navPath.size()));
+    if (navPath.isEmpty() || !currentFolder.exists())
+        return;
 
-    // Restore navigation path
-    navigationPath = navPath;
+    // Clear existing columns
+    folderColumns.clear();
+    navigationPath.clear();
 
-    // Navigate to the folder to update UI
-    if (currentFolder.exists() && currentFolder.isDirectory())
+    // Rebuild columns for each folder in the path WITHOUT triggering callbacks
+    for (int i = 0; i < navPath.size(); ++i)
     {
-        DBG("Navigating to folder...");
-        navigateToFolder(currentFolder, navPath.size() - 1);
+        const auto& folder = navPath[i];
+        if (!folder.exists() || !folder.isDirectory())
+            break;
+
+        // Add column
+        addFolderColumn(folder.getFileName(), false);
+        navigationPath.add(folder);
+
+        // Populate column
+        if (auto* column = folderColumns.getLast())
+        {
+            scanFolder(folder, column);
+        }
     }
-    else
-    {
-        DBG("Folder doesn't exist or isn't a directory");
-    }
+
+    updateColumnsLayout();
+    resized();
+    repaint();
 }
 
 void GrooveBrowser::addFolderColumn(const juce::String& title, bool isFileColumn)

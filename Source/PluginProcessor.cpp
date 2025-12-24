@@ -557,21 +557,14 @@ void DrumGrooveProcessor::saveBrowserState(const juce::File& currentFolder,
                                            const juce::Array<juce::File>& navPath,
                                            const juce::File& selectedFile)
 {
-    DBG("=== SAVING BROWSER STATE ===");
-    DBG("Current Folder: " + currentFolder.getFullPathName());
-    DBG("Selected File: " + selectedFile.getFullPathName());
-    DBG("Nav Path Count: " + juce::String(navPath.size()));
-
     guiStateTree.setProperty("browserCurrentFolder", currentFolder.getFullPathName(), nullptr);
     guiStateTree.setProperty("browserSelectedFile", selectedFile.getFullPathName(), nullptr);
 
-    // Save navigation path as comma-separated list
     juce::String navPathStr;
     for (int i = 0; i < navPath.size(); ++i)
     {
         if (i > 0) navPathStr += "|";
         navPathStr += navPath[i].getFullPathName();
-        DBG("  Path[" + juce::String(i) + "]: " + navPath[i].getFullPathName());
     }
     guiStateTree.setProperty("browserNavPath", navPathStr, nullptr);
 }
@@ -580,28 +573,17 @@ void DrumGrooveProcessor::restoreBrowserState(juce::File& currentFolder,
                                               juce::Array<juce::File>& navPath,
                                               juce::File& selectedFile) const
                                               {
-                                                  DBG("=== RESTORING BROWSER STATE ===");
-
                                                   currentFolder = juce::File(guiStateTree.getProperty("browserCurrentFolder", "").toString());
                                                   selectedFile = juce::File(guiStateTree.getProperty("browserSelectedFile", "").toString());
 
-                                                  DBG("Restored Current Folder: " + currentFolder.getFullPathName());
-                                                  DBG("Restored Selected File: " + selectedFile.getFullPathName());
-
                                                   navPath.clear();
                                                   juce::String navPathStr = guiStateTree.getProperty("browserNavPath", "").toString();
-                                                  DBG("Nav Path String: " + navPathStr);
-
                                                   if (navPathStr.isNotEmpty())
                                                   {
                                                       juce::StringArray paths = juce::StringArray::fromTokens(navPathStr, "|", "");
                                                       for (const auto& path : paths)
-                                                      {
                                                           navPath.add(juce::File(path));
-                                                          DBG("  Restored Path: " + path);
-                                                      }
                                                   }
-                                                  DBG("Total paths restored: " + juce::String(navPath.size()));
                                               }
 
 void DrumGrooveProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
