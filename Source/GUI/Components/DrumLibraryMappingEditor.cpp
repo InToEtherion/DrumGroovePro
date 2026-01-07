@@ -1,6 +1,8 @@
 #include "DrumLibraryMappingEditor.h"
 #include "DrumGrooveLookAndFeel.h"
 #include "PluginProcessor.h"
+#include "CustomColourPicker.h"
+#include "GrooveBrowser.h"
 
 DrumLibraryMappingEditor::DrumLibraryMappingEditor(DrumLibraryManager& manager, DrumGrooveProcessor* proc)
 : drumLibraryManager(manager), processor(proc)
@@ -144,6 +146,19 @@ void DrumLibraryMappingEditor::loadWorkingCopy()
             pm.description = drumLibraryManager.getCustomDrumName(lib, gmNote);
             if (pm.description.isEmpty())
                 pm.description = DrumLibraryManager::getGMDrumName(gmNote);
+
+            // Load custom color if exists
+            if (drumLibraryManager.hasCustomNoteColour(lib, gmNote))
+            {
+                pm.colour = drumLibraryManager.getCustomNoteColour(lib, gmNote);
+                pm.hasCustomColour = true;
+            }
+            else
+            {
+                pm.colour = DrumLibraryManager::getDefaultColourForGMNote(gmNote);
+                pm.hasCustomColour = false;
+            }
+
             libMappings.push_back(pm);
         }
 
@@ -160,14 +175,11 @@ std::vector<DrumLibraryMappingEditor::PendingMapping>& DrumLibraryMappingEditor:
 
 bool DrumLibraryMappingEditor::isProtectedLibrary(const juce::String& libraryName) const
 {
-    // ONLY these 4 libraries are fully protected:
+    // ONLY these 2 libraries are fully protected:
     // - No delete icon at library level
     // - No Edit/Delete buttons at row level
     return libraryName == "General MIDI" ||
-    libraryName == "Bypass (No Remapping)" ||
-    libraryName == "Salamander Drumkit" ||
-    libraryName == "MuldjordKit" ||
-    libraryName == "The Aasimonster";
+    libraryName == "Bypass (No Remapping)";
 }
 
 void DrumLibraryMappingEditor::paint(juce::Graphics& g)
@@ -212,12 +224,12 @@ void DrumLibraryMappingEditor::resized()
 
     int totalHeight = mappingRows.size() * 35;
 
-    mappingsContainer.setBounds(0, 0, bounds.getWidth() - 20, juce::jmax(totalHeight, bounds.getHeight()));
+    mappingsContainer.setBounds(0, 0, 700, juce::jmax(totalHeight, bounds.getHeight()));
 
     int yPos = 0;
     for (auto* row : mappingRows)
     {
-        row->setBounds(0, yPos, mappingsContainer.getWidth(), 35);
+        row->setBounds(0, yPos, 700, 35);
         yPos += 35;
     }
 
@@ -398,7 +410,8 @@ void DrumLibraryMappingEditor::updateMappingsForSelectedProduct()
     {
         const auto& pm = mappings[i];
 
-        auto* row = mappingRows.add(new NoteMappingRow(pm.gmNote, pm.targetNote, pm.description, isReadOnly));
+        auto* row = mappingRows.add(new NoteMappingRow(pm.gmNote, pm.targetNote, pm.description,
+                                                       isReadOnly, pm.colour, pm.hasCustomColour));
         mappingsContainer.addAndMakeVisible(row);
 
         if (!isReadOnly)
@@ -419,6 +432,48 @@ void DrumLibraryMappingEditor::updateMappingsForSelectedProduct()
             row->onEdit = [this, row]()
             {
                 showEditMappingDialog(row);
+            };
+
+            row->onColourChange = [this, capturedIndex, selectedProduct, row]()
+            {
+                // Check if checkbox is being unchecked (reverting to default)
+                if (!row->overwriteCheckbox.getToggleState())
+                {
+                    // User unchecked the checkbox - revert to default color
+                    auto& libMappings = getWorkingMappingsForLibrary(selectedProduct);
+                    if (capturedIndex < libMappings.size())
+                    {
+                        auto& mapping = libMappings[capturedIndex];
+                        mapping.colour = DrumLibraryManager::getDefaultColourForGMNote(mapping.gmNote);
+                        mapping.hasCustomColour = false;
+
+                        row->setColour(mapping.colour, false);
+                        hasUnsavedChanges = true;
+                    }
+                }
+                else
+                {
+                    // Checkbox is checked - show color picker
+                    showColourPicker(row, capturedIndex, selectedProduct);
+                }
+            };
+
+            // NEW: onValueChanged callback to update working copy when fields are edited directly
+            row->onValueChanged = [this, capturedIndex, selectedProduct, row]()
+            {
+                auto& libMappings = getWorkingMappingsForLibrary(selectedProduct);
+                if (capturedIndex < libMappings.size())
+                {
+                    auto& mapping = libMappings[capturedIndex];
+                    mapping.gmNote = row->getGMNote();
+                    mapping.targetNote = row->getTargetNote();
+                    mapping.description = row->getDescription();
+                    hasUnsavedChanges = true;
+
+                    DBG("Direct edit: GM " + juce::String(mapping.gmNote) +
+                    " -> Target " + juce::String(mapping.targetNote) +
+                    ", Description: " + mapping.description);
+                }
             };
         }
 
@@ -520,6 +575,10 @@ void DrumLibraryMappingEditor::showAddNoteMappingDialog()
         pm.targetNote = (uint8_t)targetNote;
         pm.description = description.isEmpty() ? DrumLibraryManager::getGMDrumName((uint8_t)gmNote) : description;
 
+        // AUTO-POPULATE with default GM color
+        pm.colour = DrumLibraryManager::getDefaultColourForGMNote((uint8_t)gmNote);
+        pm.hasCustomColour = false;
+
         auto& libMappings = getWorkingMappingsForLibrary(selectedProduct);
 
         // Check for duplicate GM note
@@ -530,6 +589,8 @@ void DrumLibraryMappingEditor::showAddNoteMappingDialog()
             {
                 existing.targetNote = pm.targetNote;
                 existing.description = pm.description;
+                existing.colour = pm.colour;
+                existing.hasCustomColour = pm.hasCustomColour;
                 found = true;
                 break;
             }
@@ -689,12 +750,13 @@ void DrumLibraryMappingEditor::commitChanges()
                 }
             }
 
-            // If not in working copy, remove it
+
             if (!stillExists)
             {
                 DBG("Removing deleted mapping: GM " + juce::String(gmNote));
                 drumLibraryManager.removeMappingForNote(lib, gmNote);
                 drumLibraryManager.clearCustomDrumName(lib, gmNote);
+                drumLibraryManager.clearCustomNoteColour(lib, gmNote);
             }
         }
 
@@ -703,11 +765,21 @@ void DrumLibraryMappingEditor::commitChanges()
         {
             drumLibraryManager.updateLibraryMapping(lib, pm.gmNote, pm.targetNote);
 
-            juce::String defaultName = DrumLibraryManager::getGMDrumName(pm.gmNote);
-            if (pm.description != defaultName && pm.description.isNotEmpty())
+            if (pm.description.isNotEmpty())
                 drumLibraryManager.setCustomDrumName(lib, pm.gmNote, pm.description);
             else
                 drumLibraryManager.clearCustomDrumName(lib, pm.gmNote);
+
+            // Handle custom colors properly
+            if (pm.hasCustomColour)
+            {
+                drumLibraryManager.setCustomNoteColour(lib, pm.gmNote, pm.colour);
+            }
+            else
+            {
+                // No custom color - clear any existing custom color
+                drumLibraryManager.clearCustomNoteColour(lib, pm.gmNote);
+            }
         }
     }
 
@@ -716,6 +788,9 @@ void DrumLibraryMappingEditor::commitChanges()
 
     hasUnsavedChanges = false;
 
+    // Force reload from disk to ensure colors are fresh
+    drumLibraryManager.loadCustomMappings();
+
     if (onLibrariesChanged)
         onLibrariesChanged();
 
@@ -723,6 +798,42 @@ void DrumLibraryMappingEditor::commitChanges()
     pendingDeletedLibraries.clear();
 
     DBG("=== Target Library Changes Committed ===");
+
+    // Trigger browser refresh to show new custom names in dissector immediately
+    if (auto* grooveBrowser = findParentComponentOfClass<GrooveBrowser>())
+    {
+        DBG("Refreshing GrooveBrowser to show updated custom names");
+        grooveBrowser->refreshCurrentView();
+    }
+}
+
+void DrumLibraryMappingEditor::showColourPicker(NoteMappingRow* row, size_t mappingIndex,
+                                                const juce::String& libraryName)
+{
+    // Only show color picker if checkbox is checked
+    if (!row->overwriteCheckbox.getToggleState())
+        return;
+
+    auto& mapping = getWorkingMappingsForLibrary(libraryName)[mappingIndex];
+
+    auto* colourPicker = new CustomColourPicker(mapping.colour);
+
+    // Set up callback for when OK is clicked
+    colourPicker->onColourChanged = [this, row, mappingIndex, libraryName](const juce::Colour& newColour)
+    {
+        auto& mapping = getWorkingMappingsForLibrary(libraryName)[mappingIndex];
+        mapping.colour = newColour;
+        mapping.hasCustomColour = true;
+
+        // Update the row's visual appearance immediately
+        row->setColour(newColour, true);
+        hasUnsavedChanges = true;
+    };
+
+    juce::CallOutBox::launchAsynchronously(
+        std::unique_ptr<juce::Component>(colourPicker),
+                                           row->getScreenBounds(),
+                                           nullptr);
 }
 
 void DrumLibraryMappingEditor::pasteFromClipboard()
@@ -856,14 +967,21 @@ void DrumLibraryMappingEditor::showEditor(DrumLibraryManager& manager, DrumGroov
 // ============================================================================
 
 DrumLibraryMappingEditor::NoteMappingRow::NoteMappingRow(uint8_t gm, uint8_t target,
-                                                         const juce::String& description, bool isReadOnly)
+                                                         const juce::String& description,
+                                                         bool isReadOnly, const juce::Colour& colour,
+                                                         bool hasCustom)
 : gmNote(gm)
 , targetNote(target)
 , currentDescription(description)
 , readOnly(isReadOnly)
+, currentColour(colour)
+, hasCustom(hasCustom)
 , deleteButton("Delete", juce::DrawableButton::ImageFitted)
 {
     auto& lnf = DrumGrooveLookAndFeel::getInstance();
+
+    // Store default color for this GM note
+    defaultColour = DrumLibraryManager::getDefaultColourForGMNote(gm);
 
     gmNoteLabel.setText(juce::String(gm), juce::dontSendNotification);
     gmNoteLabel.setFont(lnf.getNormalFont().withHeight(12.0f));
@@ -907,6 +1025,55 @@ DrumLibraryMappingEditor::NoteMappingRow::NoteMappingRow(uint8_t gm, uint8_t tar
     playButton.addListener(this);
     addAndMakeVisible(playButton);
 
+    // Color button - shows default or custom color
+    colourButton.setButtonText("");
+    colourButton.setColour(juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+    colourButton.setColour(juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
+    colourButton.setColour(juce::ComboBox::outlineColourId, juce::Colours::transparentBlack);
+    colourButton.addListener(this);
+    addAndMakeVisible(colourButton);
+
+    // Overwrite checkbox
+    overwriteCheckbox.setButtonText("");
+    overwriteCheckbox.setTooltip("Check to override default color");
+    overwriteCheckbox.setToggleState(hasCustom, juce::dontSendNotification);
+    overwriteCheckbox.addListener(this);
+    overwriteCheckbox.setEnabled(!readOnly);
+    addAndMakeVisible(overwriteCheckbox);
+
+    // Make fields editable on click
+    gmNoteLabel.setEditable(true, true, false);
+    gmNoteLabel.onTextChange = [this]()
+    {
+        int newNote = gmNoteLabel.getText().getIntValue();
+        if (newNote >= 0 && newNote <= 127)
+        {
+            gmNote = (uint8_t)newNote;
+            if (onValueChanged) onValueChanged();
+        }
+    };
+
+    targetNoteLabel.setEditable(true, true, false);
+    targetNoteLabel.onTextChange = [this]()
+    {
+        int newNote = targetNoteLabel.getText().getIntValue();
+        if (newNote >= 0 && newNote <= 127)
+        {
+            targetNote = (uint8_t)newNote;
+            if (onValueChanged) onValueChanged();
+        }
+    };
+
+    gmNameLabel.setEditable(true, true, false);
+    gmNameLabel.onTextChange = [this]()
+    {
+        currentDescription = gmNameLabel.getText();
+        if (onValueChanged) onValueChanged();
+    };
+
+        // Update color button state based on checkbox
+        updateColourButtonState();
+
     // Load icons
     juce::File pluginFile = juce::File::getSpecialLocation(juce::File::currentExecutableFile);
     juce::File resourcesPath;
@@ -946,13 +1113,72 @@ DrumLibraryMappingEditor::NoteMappingRow::NoteMappingRow(uint8_t gm, uint8_t tar
     deleteButton.setVisible(!readOnly);  // Hide for protected libraries
     addAndMakeVisible(deleteButton);
 
-    setSize(600, 35);
+    setSize(900, 35);
+}
+
+void DrumLibraryMappingEditor::NoteMappingRow::updateColourButtonState()
+{
+    // Enable color button only if checkbox is checked and not read-only
+    colourButton.setEnabled(!readOnly && overwriteCheckbox.getToggleState());
+
+    // Update tooltip
+    if (readOnly)
+    {
+        colourButton.setTooltip("Protected library - cannot change color");
+    }
+    else if (overwriteCheckbox.getToggleState())
+    {
+        colourButton.setTooltip("Click to change custom color");
+    }
+    else
+    {
+        colourButton.setTooltip("Default color - check 'Overwrite' to customize");
+    }
+
+    // Update current color based on checkbox state
+    if (!overwriteCheckbox.getToggleState())
+    {
+        currentColour = defaultColour;
+        hasCustom = false;
+    }
+
+    repaint();
+}
+
+void DrumLibraryMappingEditor::NoteMappingRow::setColour(const juce::Colour& newColour, bool isCustom)
+{
+    currentColour = newColour;
+    hasCustom = isCustom;
+
+    // Update checkbox to reflect custom color state
+    overwriteCheckbox.setToggleState(isCustom, juce::dontSendNotification);
+
+    // Update button enabled state and tooltips directly (don't call updateColourButtonState!)
+    colourButton.setEnabled(!readOnly && isCustom);
+
+    if (readOnly)
+    {
+        colourButton.setTooltip("Protected library - cannot change color");
+    }
+    else if (isCustom)
+    {
+        colourButton.setTooltip("Click to change custom color");
+    }
+    else
+    {
+        colourButton.setTooltip("Default color - check 'Overwrite' to customize");
+    }
+
+    repaint();
 }
 
 DrumLibraryMappingEditor::NoteMappingRow::~NoteMappingRow()
 {
     editButton.removeListener(this);
     deleteButton.removeListener(this);
+    playButton.removeListener(this);
+    colourButton.removeListener(this);
+    overwriteCheckbox.removeListener(this);
 }
 
 void DrumLibraryMappingEditor::NoteMappingRow::buttonClicked(juce::Button* button)
@@ -972,6 +1198,28 @@ void DrumLibraryMappingEditor::NoteMappingRow::buttonClicked(juce::Button* butto
         if (onPlay)
             onPlay();
     }
+    else if (button == &colourButton && onColourChange)
+    {
+        // Only trigger color change if checkbox is checked
+        if (overwriteCheckbox.getToggleState())
+            onColourChange();
+    }
+    else if (button == &overwriteCheckbox)
+    {
+        // When checkbox changes, update color button state
+        if (!overwriteCheckbox.getToggleState())
+        {
+            // Checkbox unchecked - revert to default color
+            currentColour = defaultColour;
+            hasCustom = false;
+
+            // Notify parent that color changed (to clear custom color)
+            if (onColourChange)
+                onColourChange();
+        }
+
+        updateColourButtonState();
+    }
 }
 
 void DrumLibraryMappingEditor::NoteMappingRow::paint(juce::Graphics& g)
@@ -990,31 +1238,53 @@ void DrumLibraryMappingEditor::NoteMappingRow::paint(juce::Graphics& g)
         g.setFont(14.0f);
         g.drawText("->", arrowLabel.getBounds(), juce::Justification::centred);
     }
+
+    // Draw color swatch on color button
+    auto colourBounds = colourButton.getBounds().reduced(2).toFloat();
+
+    // STEP 1: Draw white background first (so colors show bright)
+    g.setColour(juce::Colours::white);
+    g.fillRoundedRectangle(colourBounds, 3.0f);
+
+    // STEP 2: Draw the actual color with full opacity
+    g.setColour(currentColour.withAlpha(1.0f));
+    g.fillRoundedRectangle(colourBounds, 3.0f);
+
+    // STEP 3: Draw a subtle border
+    g.setColour(juce::Colours::black.withAlpha(0.3f));
+    g.drawRoundedRectangle(colourBounds, 3.0f, 1.0f);
 }
 
 void DrumLibraryMappingEditor::NoteMappingRow::resized()
 {
     auto bounds = getLocalBounds().reduced(5, 0);
 
-    // Layout: GM Note | Description | Arrow | Target Note | Play | Edit | Delete
+    // Layout: GM Note | Description | Arrow | Target Note | Play | Edit | Delete | Checkbox | Color
     gmNoteLabel.setBounds(bounds.removeFromLeft(50));
-    bounds.removeFromLeft(5);
+    bounds.removeFromLeft(2);
     gmNameLabel.setBounds(bounds.removeFromLeft(180));
-    bounds.removeFromLeft(5);
+    bounds.removeFromLeft(2);
     arrowLabel.setBounds(bounds.removeFromLeft(30));
-    bounds.removeFromLeft(5);
+    bounds.removeFromLeft(2);
     targetNoteLabel.setBounds(bounds.removeFromLeft(50));
-    bounds.removeFromLeft(10);
+    bounds.removeFromLeft(10);  // Spacing before buttons
+
+    // Lay out buttons from LEFT (not RIGHT) for better spacing control
+    playButton.setBounds(bounds.removeFromLeft(50));
+    bounds.removeFromLeft(5);
 
     if (!readOnly)
     {
-        deleteButton.setBounds(bounds.removeFromRight(30));
-        bounds.removeFromRight(5);
-        editButton.setBounds(bounds.removeFromRight(40));
-        bounds.removeFromRight(5);
+        editButton.setBounds(bounds.removeFromLeft(40));
+        bounds.removeFromLeft(5);
+        deleteButton.setBounds(bounds.removeFromLeft(30));
+        bounds.removeFromLeft(5);
     }
 
-    playButton.setBounds(bounds.removeFromRight(50));
+    // Checkbox and color button
+    overwriteCheckbox.setBounds(bounds.removeFromLeft(20).reduced(0, 8));
+    bounds.removeFromLeft(5);
+    colourButton.setBounds(bounds.removeFromLeft(40).reduced(5, 0));
 }
 
 

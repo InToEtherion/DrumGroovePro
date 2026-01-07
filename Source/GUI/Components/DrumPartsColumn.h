@@ -52,7 +52,7 @@ public juce::ListBoxModel,
             juce::var getDragSourceDescription(const juce::SparseSet<int>& selectedRows) override;
 
             // Set drum parts to display
-            void setDrumParts(const juce::Array<DrumPart>& parts, const juce::File& sourceFile);
+            void setDrumParts(const juce::Array<DrumPart>& parts, const juce::File& sourceFile,DrumLibrary srcLib);
             void clearParts();
 
             // Getters
@@ -76,9 +76,12 @@ public juce::ListBoxModel,
 
         private:
             DrumGrooveProcessor& processor;
+            double currentPartReferenceBPM = 120.0;
+            float playbackProgress = 0.0f;
             juce::String columnTitle;
             juce::Array<DrumPart> drumParts;
             juce::File originalMidiFile;
+            DrumLibrary sourceLibrary = DrumLibrary::Unknown;
             juce::File lastTempFile;
             int selectedRow = -1;
             bool isExternalDragActive = false;

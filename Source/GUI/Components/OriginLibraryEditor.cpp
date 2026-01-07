@@ -143,6 +143,8 @@ void OriginLibraryEditor::loadWorkingCopy()
             pm.description = drumLibraryManager.getCustomDrumName(lib, gmNote);
             if (pm.description.isEmpty())
                 pm.description = DrumLibraryManager::getGMDrumName(gmNote);
+
+
             libMappings.push_back(pm);
         }
 
@@ -417,7 +419,8 @@ void OriginLibraryEditor::updateMappingsForSelectedOrigin()
     {
         const auto& pm = mappings[i];
 
-        auto* row = mappingRows.add(new MappingRow(pm.originNote, pm.gmNote, pm.description, isReadOnly));
+        auto* row = mappingRows.add(new MappingRow(pm.originNote, pm.gmNote, pm.description,
+                                                   isReadOnly));
         mappingsContainer.addAndMakeVisible(row);
 
         if (!isReadOnly)
@@ -435,10 +438,11 @@ void OriginLibraryEditor::updateMappingsForSelectedOrigin()
                 }
             };
 
-            row->onEdit = [this, row]()
+            row->onEdit = [this, capturedRow = row]()
             {
-                showEditMappingDialog(row);
+                showEditMappingDialog(capturedRow);
             };
+
         }
 
         // ADD PLAY CALLBACK (for ALL rows, even read-only)
@@ -966,8 +970,8 @@ OriginLibraryEditor::MappingRow::MappingRow(uint8_t originNote, uint8_t gmNote,
 : currentOriginNote(originNote)
 , currentGMNote(gmNote)
 , currentDescription(description)
-, isReadOnly(readOnly)
 , deleteButton("Delete", juce::DrawableButton::ImageFitted)
+, isReadOnly(readOnly)
 {
     auto& lnf = DrumGrooveLookAndFeel::getInstance();
 
@@ -1000,7 +1004,37 @@ OriginLibraryEditor::MappingRow::MappingRow(uint8_t originNote, uint8_t gmNote,
     drumNameLabel.setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(drumNameLabel);
 
-    playButton.setButtonText("Play");
+    // Make fields editable on click
+    originNoteLabel.setEditable(true, true, false);
+    originNoteLabel.onTextChange = [this]()
+    {
+        int newNote = originNoteLabel.getText().getIntValue();
+        if (newNote >= 0 && newNote <= 127)
+        {
+            currentOriginNote = (uint8_t)newNote;
+            if (onValueChanged) onValueChanged();
+        }
+    };
+
+    gmNoteLabel.setEditable(true, true, false);
+    gmNoteLabel.onTextChange = [this]()
+    {
+        int newNote = gmNoteLabel.getText().getIntValue();
+        if (newNote >= 0 && newNote <= 127)
+        {
+            currentGMNote = (uint8_t)newNote;
+            if (onValueChanged) onValueChanged();
+        }
+    };
+
+    drumNameLabel.setEditable(true, true, false);
+    drumNameLabel.onTextChange = [this]()
+    {
+        currentDescription = drumNameLabel.getText();
+        if (onValueChanged) onValueChanged();
+    };
+
+        playButton.setButtonText("Play");
     playButton.setTooltip("Preview this drum sound");
     playButton.addListener(this);
     addAndMakeVisible(playButton);
@@ -1050,7 +1084,7 @@ OriginLibraryEditor::MappingRow::MappingRow(uint8_t originNote, uint8_t gmNote,
     deleteButton.setVisible(!readOnly);
     addAndMakeVisible(deleteButton);
 
-    setSize(600, 35);
+    setSize(700, 35);
 }
 
 OriginLibraryEditor::MappingRow::~MappingRow()
@@ -1094,7 +1128,7 @@ void OriginLibraryEditor::MappingRow::resized()
     int labelWidth = 60;
     int arrowWidth = 30;
     int buttonWidth = 60;
-    int playWidth = 50;  // CHANGE THIS from 35 or 40 to 50
+    int playWidth = 50;
 
     originNoteLabel.setBounds(bounds.removeFromLeft(labelWidth));
     arrowLabel.setBounds(bounds.removeFromLeft(arrowWidth));
@@ -1108,7 +1142,6 @@ void OriginLibraryEditor::MappingRow::resized()
         editButton.setBounds(bounds.removeFromRight(buttonWidth).reduced(5, 0));
     }
 
-    // Play button (before edit/delete buttons)
     playButton.setBounds(bounds.removeFromRight(playWidth).reduced(5, 0));
 
     bounds.removeFromLeft(10);

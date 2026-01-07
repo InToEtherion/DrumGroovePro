@@ -2,7 +2,7 @@
 #include "GUI/LookAndFeel/DrumGrooveLookAndFeel.h"
 #include "GUI/LookAndFeel/ColourPalette.h"
 #include "GUI/Components/MultiTrackContainer.h"
-#include "MidiEditorComponent.h"
+#include "GUI/Components/MidiEditorComponent.h"
 
 DrumGrooveEditor::DrumGrooveEditor(DrumGrooveProcessor& p)
 : AudioProcessorEditor(&p), processor(p)

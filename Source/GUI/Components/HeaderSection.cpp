@@ -65,7 +65,7 @@ void HeaderSection::setupComponents()
     manualBPMLabel.setFont(lnf.getSmallFont());
     addAndMakeVisible(manualBPMLabel);
 
-    manualBPMSlider.setRange(60.0, 400.0, 1.0);
+    manualBPMSlider.setRange(60.0, 300.0, 1.0);
     manualBPMSlider.setValue(120.0);
     manualBPMSlider.setSliderStyle(juce::Slider::LinearHorizontal);
     manualBPMSlider.setTextBoxStyle(juce::Slider::TextBoxAbove, false, 50, 18);

@@ -2,15 +2,18 @@
 
 #include <JuceHeader.h>
 #include "EditableMidiClip.h"
-#include "EditorTool.h"
+#include "../EditorTools/EditorTool.h"
+#include "../EditorTools/MidiNoteCommands.h"
 #include "DrumLibraryManager.h"
-#include "MidiNoteCommands.h"
+
+// Forward declaration
+class DrumGrooveProcessor;
 
 class DrumGridView : public juce::Component,
 public juce::ScrollBar::Listener
 {
 public:
-    DrumGridView(EditableMidiClip& clip, DrumLibraryManager& libManager);
+    DrumGridView(EditableMidiClip& clip, DrumLibraryManager& libManager, DrumGrooveProcessor& proc);
     ~DrumGridView() override;
 
     void paint(juce::Graphics& g) override;
@@ -72,6 +75,7 @@ public:
 private:
     EditableMidiClip& clip;
     DrumLibraryManager& drumLibraryManager;
+    DrumGrooveProcessor& processor;
 
     // View parameters
     float zoomFactor = 1.0f;

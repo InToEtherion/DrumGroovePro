@@ -15,7 +15,7 @@ static juce::String getGridResolutionName(double resolution)
 }
 
 MidiEditorComponent::EditorContent::EditorContent(EditableMidiClip& midiClip, DrumLibraryManager& libManager, MidiProcessor& midiProc, DrumGrooveProcessor& proc)
-: toolbar(), gridView(midiClip, libManager), velocityLane(midiClip, gridView), clip(midiClip), midiProcessor(midiProc), processor(proc)
+: toolbar(), gridView(midiClip, libManager, proc), velocityLane(midiClip, gridView, libManager), clip(midiClip), midiProcessor(midiProc), processor(proc)
 {
     setWantsKeyboardFocus(true);
 
@@ -23,6 +23,22 @@ MidiEditorComponent::EditorContent::EditorContent(EditableMidiClip& midiClip, Dr
     addAndMakeVisible(gridView);
     addAndMakeVisible(velocityLane);
     velocityLane.setVisible(false);
+
+    // Setup mapping labels
+    juce::String originLibName = DrumLibraryManager::getLibraryName(clip.getSourceLibrary());
+    juce::String targetLibName = DrumLibraryManager::getLibraryName(proc.getTargetLibrary());
+
+    originMappingLabel.setText("Origin: " + originLibName, juce::dontSendNotification);
+    originMappingLabel.setFont(juce::Font(12.0f));
+    originMappingLabel.setColour(juce::Label::textColourId, juce::Colour(0xFFB8B8B8));
+    originMappingLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(originMappingLabel);
+
+    targetMappingLabel.setText("Target: " + targetLibName, juce::dontSendNotification);
+    targetMappingLabel.setFont(juce::Font(12.0f));
+    targetMappingLabel.setColour(juce::Label::textColourId, juce::Colour(0xFFB8B8B8));
+    targetMappingLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(targetMappingLabel);
 
     // Tool and grid callbacks
     toolbar.onToolChanged = [this](EditorTool tool) { gridView.setCurrentTool(tool); };
@@ -187,6 +203,13 @@ void MidiEditorComponent::EditorContent::resized()
 
     // Toolbar (2 rows = 100px)
     toolbar.setBounds(bounds.removeFromTop(100));
+
+    // Mapping labels (20px strip below toolbar)
+    auto labelArea = bounds.removeFromTop(20);
+    labelArea.removeFromLeft(10);  // Small left margin
+    originMappingLabel.setBounds(labelArea.removeFromLeft(200));
+    labelArea.removeFromLeft(20);  // Space between labels
+    targetMappingLabel.setBounds(labelArea.removeFromLeft(200));
 
     // Velocity lane at bottom if visible
     if (velocityLaneVisible)
@@ -455,6 +478,7 @@ bool MidiEditorComponent::openMidiFile(const juce::File& file, DrumLibrary sourc
     setupCallbacks();
     updateTitle();
 
+    setSize(1400, 800);
     centreWithSize(1400, 800);
     setVisible(true);
     content->grabKeyboardFocus();
@@ -480,6 +504,7 @@ void MidiEditorComponent::createNewClip(DrumLibrary sourceLib, double bpm, int b
     setupCallbacks();
     updateTitle();
 
+    setSize(1400, 800);
     centreWithSize(1400, 800);
     setVisible(true);
     content->grabKeyboardFocus();

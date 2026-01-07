@@ -247,6 +247,8 @@ void MidiProcessor::addMidiClip(const juce::File& file, double startTime, DrumLi
 
     clip->duration = explicitDuration;
 
+    setLoopRange(0.0, explicitDuration);
+
     DBG("MidiProcessor: Clip loaded successfully - " + juce::String(clip->sequence.getNumEvents()) + " events");
     DBG("MidiProcessor: Added clip with explicit duration: " + juce::String(explicitDuration, 3) +
     "s, referenceBPM: " + juce::String(referenceBPM, 2) + ", targetBPM: " + juce::String(targetBPM, 2) +

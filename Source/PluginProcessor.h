@@ -6,7 +6,7 @@
 #include "Core/MidiProcessor.h"
 #include "Core/DrumLibraryManager.h"
 #include "Core/FavoritesManager.h"
-#include "SectionManager.h"
+#include "Core/SectionManager.h"
 #include "DrumMixer.h"
 #include "SampleEngine.h"
 
@@ -146,8 +146,23 @@ public juce::ValueTree::Listener,
         // Target library access
         DrumLibrary getTargetLibrary() const
         {
-            int libraryIndex = static_cast<int>(parameters.getRawParameterValue("targetLibrary")->load());
-            return static_cast<DrumLibrary>(libraryIndex + 1);
+            int paramIndex = static_cast<int>(parameters.getRawParameterValue("targetLibrary")->load());
+
+            // Get the alphabetically sorted library list
+            auto libraryNames = drumLibraryManager.getLoadedLibraryNames();
+
+            // Make sure index is valid
+            if (paramIndex >= 0 && paramIndex < libraryNames.size())
+            {
+                // Get the library name at this index
+                juce::String libraryName = libraryNames[paramIndex];
+
+                // Convert name to enum
+                return drumLibraryManager.getLibraryFromName(libraryName);
+            }
+
+            // Fallback to General MIDI
+            return DrumLibrary::GeneralMIDI;
         }
 
         void setTargetLibrary(DrumLibrary library)

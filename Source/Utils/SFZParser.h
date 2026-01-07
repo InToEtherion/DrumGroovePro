@@ -22,6 +22,7 @@ public:
         float randomHigh { 1.0f };   // Round-robin range end (hirand)
         float volume { 0.0f };       // Volume adjustment in dB
         int chokeGroup { 0 };        // Choke group (for hi-hats, cymbals)
+        float ampVeltrack { 100.0f }; // Velocity tracking (0-100%)
 
         // Check if this region matches the given MIDI note and velocity
         bool matches(int note, int velocity) const
@@ -46,6 +47,7 @@ public:
         int velocityHigh { 127 };
         float volume { 0.0f };
         int chokeGroup { 0 };
+        float ampVeltrack { 100.0f }; // Velocity tracking (0-100%)
         std::vector<Region> regions;
     };
 

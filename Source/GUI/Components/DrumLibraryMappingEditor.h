@@ -65,6 +65,10 @@ public juce::ListBoxModel,
             uint8_t gmNote;
             uint8_t targetNote;
             juce::String description;
+            juce::Colour colour;
+            bool hasCustomColour = false;
+
+            PendingMapping() : gmNote(0), targetNote(0), colour(juce::Colours::white), hasCustomColour(false) {}
 
             bool operator==(const PendingMapping& other) const
             {
@@ -99,7 +103,8 @@ public juce::ListBoxModel,
         struct NoteMappingRow : public juce::Component,
         public juce::Button::Listener
         {
-            NoteMappingRow(uint8_t gm, uint8_t target, const juce::String& description, bool isReadOnly = false);
+            NoteMappingRow(uint8_t gm, uint8_t target, const juce::String& description,
+                           bool isReadOnly, const juce::Colour& colour, bool hasCustom);
             ~NoteMappingRow() override;
             void resized() override;
             void paint(juce::Graphics& g) override;
@@ -122,14 +127,27 @@ public juce::ListBoxModel,
             juce::DrawableButton deleteButton;
             juce::TextButton editButton;
             juce::TextButton playButton;
+            juce::TextButton colourButton;
+            juce::ToggleButton overwriteCheckbox;
 
             std::function<void()> onDelete;
             std::function<void()> onEdit;
             std::function<void()> onPlay;
+            std::function<void()> onColourChange;
+            std::function<void()> onValueChanged;
 
             uint8_t getGMNote() const { return gmNote; }
             uint8_t getTargetNote() const { return targetNote; }
             juce::String getDescription() const { return gmNameLabel.getText(); }
+            void setColour(const juce::Colour& newColour, bool isCustom);
+            juce::Colour getColour() const { return currentColour; }
+            bool hasCustomColour() const { return hasCustom; }
+
+        private:
+            juce::Colour currentColour;
+            juce::Colour defaultColour;
+            bool hasCustom = false;
+            void updateColourButtonState();
         };
 
         juce::OwnedArray<NoteMappingRow> mappingRows;
@@ -143,6 +161,7 @@ public juce::ListBoxModel,
         void deleteProduct(int productIndex);
         void commitChanges();
         void pasteFromClipboard();
+        void showColourPicker(NoteMappingRow* row, size_t mappingIndex, const juce::String& libraryName);
 
         std::function<void()> onLibrariesChanged;
 

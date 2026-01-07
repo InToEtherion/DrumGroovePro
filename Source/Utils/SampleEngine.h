@@ -8,8 +8,31 @@
 #include <vector>
 #include <map>
 #include <array>
-#include <random>
 
+/**
+ * Main sample playback engine
+ * Loads samples from SFZ or DrumGizmo XML format, manages voices, handles MIDI
+ * Outputs audio to separate per-part buffers for proper per-part mixing
+ *
+ * Supported formats:
+ *   - SFZ: Standard SFZ format with ALL.sfz file
+ *   - DrumGizmo: XML format with KitName.xml and Midimap.xml
+ *
+ * CRITICAL: Supports sample-accurate triggering - notes start at exact sample positions
+ *
+ * POLYPHONIC PLAYBACK: Multiple voices can play the same note simultaneously
+ * This allows natural decay layering for fast repeated hits (metal drumming)
+ *
+ * VOICE STEALING: When all voices are busy, the oldest voice is stolen with a
+ * short crossfade to prevent clicks
+ *
+ * HUMANIZATION FEATURES:
+ *   - Velocity Humanization: Random Â± velocity variation for natural dynamics
+ *   - Timing Humanization: Random Â± sample offset for natural feel
+ *   - Round Robin: Cycle through multiple samples to avoid machine-gun effect
+ *
+ * Supports kick alternation feature to avoid machine-gun effect on rapid kick hits
+ */
 class SampleEngine
 {
 public:
@@ -155,24 +178,20 @@ private:
     float timingHumanization { 0.0f };
     float roundRobinAmount { 100.0f };  // Default to full round robin
 
-    // CRITICAL FIX: Thread-safe random number generator using C++11 <random>
-    // juce::Random is NOT thread-safe, using it on audio thread causes undefined behavior
-    std::mt19937 audioThreadRng;  // Mersenne Twister random generator (thread-local in practice)
+    // Random generator for humanization
+    juce::Random humanizationRandom;
 
     // Round robin state - tracks last sample index per note for true round robin cycling
     std::map<int, size_t> lastRoundRobinIndex;
 
-    // CRITICAL FIX: Pre-allocated queue for pending notes to avoid vector::push_back on audio thread
-    static constexpr int MAX_PENDING_NOTES = 128;
+    // Pending note queue for timing humanization that delays notes beyond current block
     struct PendingNote
     {
         int midiNote;
         int velocity;
         int samplesRemaining;  // Samples until this note should trigger
-        bool active;           // Is this slot in use?
     };
-    std::array<PendingNote, MAX_PENDING_NOTES> pendingNotesArray;
-    std::atomic<int> pendingNotesWriteIndex{0};
+    std::vector<PendingNote> pendingNotes;
 
     // MIDI handling
     // CRITICAL: handleNoteOn now takes sampleOffset for sample-accurate triggering

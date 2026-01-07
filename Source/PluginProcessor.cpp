@@ -656,10 +656,20 @@ void DrumGrooveProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
 
         const int numSamples = buffer.getNumSamples();
 
-        // CRITICAL FIX: No setSize() calls on audio thread - buffers pre-allocated in prepareToPlay
-        // Just assert the buffer is large enough (will be caught in debug builds)
-        jassert(numSamples <= audioBuffer.getNumSamples());
-        jassert(numSamples <= partBuffers[0].getNumSamples());
+        // Ensure per-part buffers are correct size
+        for (auto& partBuffer : partBuffers)
+        {
+            if (partBuffer.getNumSamples() != numSamples)
+            {
+                partBuffer.setSize(2, numSamples, false, false, true);
+            }
+        }
+
+        // Ensure output buffer is correct size
+        if (audioBuffer.getNumSamples() != numSamples)
+        {
+            audioBuffer.setSize(2, numSamples, false, false, true);
+        }
 
         audioBuffer.clear();
 
@@ -690,8 +700,11 @@ void DrumGrooveProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
             }
             else if (!registeredAudioTracks.empty())
             {
-                // CRITICAL FIX: No setSize() on audio thread
-                jassert(numSamples <= audioTrackBuffer.getNumSamples());
+                // Ensure audio track buffer is correct size
+                if (audioTrackBuffer.getNumSamples() != numSamples)
+                {
+                    audioTrackBuffer.setSize(2, numSamples, false, false, true);
+                }
 
                 double playheadSecs = midiProcessor.getPlayheadPosition();
 
@@ -726,8 +739,11 @@ void DrumGrooveProcessor::processBlock(juce::AudioBuffer<float>& buffer, juce::M
         {
             const int numSamples = buffer.getNumSamples();
 
-            // CRITICAL FIX: No setSize() on audio thread
-            jassert(numSamples <= audioTrackBuffer.getNumSamples());
+            // Ensure audio track buffer is correct size
+            if (audioTrackBuffer.getNumSamples() != numSamples)
+            {
+                audioTrackBuffer.setSize(2, numSamples, false, false, true);
+            }
 
             double playheadSecs = midiProcessor.getPlayheadPosition();
 

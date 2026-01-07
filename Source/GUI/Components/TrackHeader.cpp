@@ -42,7 +42,7 @@ TrackHeader::TrackHeader(DrumGrooveProcessor& p, MultiTrackContainer& c, int tra
     addAndMakeVisible(bpmLabel);
 
     // BPM slider (more compact)
-    bpmSlider.setRange(40.0, 400.0, 1.0);
+    bpmSlider.setRange(40.0, 300.0, 1.0);
     double currentHeaderBPM = processor.getCurrentEffectiveBPM();
     bpmSlider.setValue(currentHeaderBPM);
     bpmSlider.setSliderStyle(juce::Slider::LinearHorizontal);
@@ -456,7 +456,7 @@ void TrackHeader::mouseDown(const juce::MouseEvent& e)
 void TrackHeader::updateBPMFromSlider()
 {
     double bpm = bpmSlider.getValue();
-    bpm = juce::jlimit(40.0, 400.0, bpm);
+    bpm = juce::jlimit(40.0, 300.0, bpm);
     syncBPMControls(bpm);
 
     container.invalidateBarWidthCache();
@@ -470,7 +470,7 @@ void TrackHeader::updateBPMFromSlider()
 
 void TrackHeader::syncBPMControls(double bpm)
 {
-    bpm = juce::jlimit(40.0, 400.0, bpm);
+    bpm = juce::jlimit(40.0, 300.0, bpm);
 
     bpmSlider.setValue(bpm, juce::dontSendNotification);
 }

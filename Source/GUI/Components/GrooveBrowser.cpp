@@ -82,11 +82,14 @@ void DraggableListItemOverlay::mouseDoubleClick(const juce::MouseEvent& e)
 
 // BrowserColumn implementation
 BrowserColumn::BrowserColumn(const juce::String& columnName, DrumGrooveProcessor& proc)
-: columnTitle(columnName), selectedRow(-1), processor(proc)
+: juce::ListBox(columnName, nullptr),
+columnTitle(columnName),
+processor(proc)
 {
+
     setModel(this);
     setRowHeight(24);
-    // Semi-transparent background (0.7f alpha) for navigation columns
+    setOutlineThickness(0);
     setColour(juce::ListBox::backgroundColourId, ColourPalette::mainBackground.withAlpha(0.75f));
     setMultipleSelectionEnabled(false);
     loadIcons();
@@ -191,7 +194,7 @@ int BrowserColumn::getNumRows()
 }
 
 void BrowserColumn::paintListBoxItem(int rowNumber, juce::Graphics& g,
-                                     int width, int height, bool rowIsSelected)
+                                      int width, int height, bool rowIsSelected)
 {
     if (rowNumber >= items.size())
         return;
@@ -199,11 +202,19 @@ void BrowserColumn::paintListBoxItem(int rowNumber, juce::Graphics& g,
     if (rowIsSelected)
     {
         g.fillAll(ColourPalette::primaryBlue);
+
+        // Draw playback progress indicator
+        if (browser && browser->currentlyPlayingColumn == this && browser->currentlyPlayingRow == rowNumber && browser->browserPlaybackActive)
+        {
+            float progressWidth = width * browser->playbackProgress;
+            g.setColour(ColourPalette::primaryBlue.darker(0.4f));
+            g.fillRect(0.0f, 0.0f, progressWidth, (float)height);
+        }
+
         g.setColour(ColourPalette::primaryText);
     }
     else
     {
-        // 100% transparent background - only draw text and icons
         g.setColour(ColourPalette::secondaryText);
 
         if (isMouseOver())
@@ -212,14 +223,12 @@ void BrowserColumn::paintListBoxItem(int rowNumber, juce::Graphics& g,
             auto itemBounds = getRowPosition(rowNumber, true);
             if (itemBounds.contains(mousePos))
             {
-                // Optional: Add a subtle highlight on hover (semi-transparent)
                 g.fillAll(ColourPalette::secondaryBackground.withAlpha(0.3f));
                 g.setColour(ColourPalette::primaryText);
             }
         }
     }
 
-    // Draw icon
     int iconX = 4;
     int iconY = (height - 16) / 2;
 
@@ -232,7 +241,6 @@ void BrowserColumn::paintListBoxItem(int rowNumber, juce::Graphics& g,
         g.drawImageAt(midiIcon, iconX, iconY);
     }
 
-    // Draw text (just the filename, no BPM info)
     auto& lnf = DrumGrooveLookAndFeel::getInstance();
     g.setFont(lnf.getNormalFont().withHeight(13.0f));
 
@@ -973,7 +981,7 @@ void GrooveBrowser::redissectCurrentMidiFile()
     // Update the parts column immediately for real-time visual feedback
     if (partsColumn && !currentDrumParts.isEmpty())
     {
-        partsColumn->setDrumParts(currentDrumParts, currentMidiFile);
+        partsColumn->setDrumParts(currentDrumParts, currentMidiFile, currentSourceLibrary);
         DBG("Parts column updated with " + juce::String(currentDrumParts.size()) + " parts");
     }
 
@@ -1058,6 +1066,8 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
         {
             headerBPM = processor.parameters.getRawParameterValue("manualBPM")->load();
         }
+        // Store BPM as reference for duration calculations (works for both cases)
+        currentReferenceBPM = headerBPM;
 
         // Get the actual duration of the MIDI file for accurate loop length
         juce::MidiFile midiFile;
@@ -1135,25 +1145,42 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
             currentPlaybackTPQN = ticksPerQuarterNote;
 
             // Use actual note end time, not bar-rounded
-            double fileDurationInSeconds = (maxTimeInTicks / ticksPerQuarterNote) * (60.0 / headerBPM);
+            double fileDurationInSeconds = (maxTimeInTicks / ticksPerQuarterNote) * (60.0 / currentReferenceBPM);
             fileDurationInSeconds = juce::jmax(0.1, fileDurationInSeconds);
 
             // Store for loop recalculation
             currentPlaybackMidiTicks = maxTimeInTicks;
             currentPlaybackTPQN = ticksPerQuarterNote;
 
-            // NEW: Enable loop by default for browser playback
+            // Enable loop by default for browser playback
             // Add the clip with proper duration IN SECONDS
-            processor.midiProcessor.addMidiClip(file, 0.0, sourceLib, 120.0, headerBPM, 0,
+            processor.midiProcessor.addMidiClip(file, 0.0, sourceLib, currentReferenceBPM, headerBPM, 0,
                                                 fileDurationInSeconds,
                                                 "preview_" + juce::Uuid().toString());
             processor.midiProcessor.setPlayheadPosition(0.0);
 
             // NEW: Set loop range to file duration IN SECONDS and enable looping
             processor.midiProcessor.setLoopRange(0.0, fileDurationInSeconds);
+            DBG("===== LOOP RANGE SET: 0.0 to " + juce::String(fileDurationInSeconds, 3) + "s =====");
             processor.midiProcessor.setLoopEnabled(true);
 
             processor.midiProcessor.play();
+
+            // Store which column and row is playing - find RIGHTMOST column with MIDI file
+            currentlyPlayingColumn = nullptr;
+            currentlyPlayingRow = -1;
+
+            for (int i = folderColumns.size() - 1; i >= 0; --i)
+            {
+                auto* column = folderColumns[i];
+                if (column->getSelectedRow() >= 0 && !column->isSelectedItemFolder())
+                {
+                    currentlyPlayingColumn = column;
+                    currentlyPlayingRow = column->getSelectedRow();
+                    break;
+                }
+            }
+            playbackProgress = 0.0f;
 
             // Track browser playback state
             browserPlaybackActive = true;
@@ -1171,7 +1198,6 @@ void GrooveBrowser::handleFileDoubleClick(const juce::File& file)
 
 void GrooveBrowser::updateLoopDurationForBPMChange()
 {
-    // Only update if browser playback is active
     if (!browserPlaybackActive || !currentlyPlayingFile.existsAsFile())
         return;
 
@@ -1179,27 +1205,34 @@ void GrooveBrowser::updateLoopDurationForBPMChange()
     if (currentPlaybackMidiTicks <= 0.0 || currentPlaybackTPQN <= 0.0)
         return;
 
-    // Get current header BPM
-    double headerBPM = 120.0;
+    // Get NEW target BPM
+    double newTargetBPM = 120.0;
     bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
 
     if (syncToHost)
     {
-        headerBPM = processor.getHostBPM();
+        newTargetBPM = processor.getHostBPM();
     }
     else
     {
-        headerBPM = processor.parameters.getRawParameterValue("manualBPM")->load();
+        newTargetBPM = processor.parameters.getRawParameterValue("manualBPM")->load();
     }
 
-    // Recalculate duration using stored MIDI ticks and current BPM
-    double newDurationInSeconds = (currentPlaybackMidiTicks / currentPlaybackTPQN) * (60.0 / headerBPM);
-    newDurationInSeconds = juce::jmax(0.1, newDurationInSeconds);
+    // CRITICAL FIX: Calculate ACTUAL playback duration at NEW target BPM
+    // This is how long the MIDI will actually play at the new speed
+    double actualPlaybackDuration = (currentPlaybackMidiTicks / currentPlaybackTPQN) * (60.0 / newTargetBPM);
+    actualPlaybackDuration = juce::jmax(0.1, actualPlaybackDuration);
 
-    // Update loop range with new duration
-    processor.midiProcessor.setLoopRange(0.0, newDurationInSeconds);
+    // Update MidiProcessor clip to play at new target BPM
+    processor.midiProcessor.updateTrackBPM(0, newTargetBPM);
 
-    DBG("BPM changed - Loop duration updated: " + juce::String(newDurationInSeconds, 3) + "s at " + juce::String(headerBPM, 2) + " BPM");
+    // Update loop range to actual playback duration
+    processor.midiProcessor.setLoopRange(0.0, actualPlaybackDuration);
+
+    DBG("===== LOOP RANGE UPDATED: 0.0 to " + juce::String(actualPlaybackDuration, 3) + "s =====");
+    DBG("BPM changed - Reference: " + juce::String(currentReferenceBPM, 2) +
+    ", Target: " + juce::String(newTargetBPM, 2) +
+    ", Duration: " + juce::String(actualPlaybackDuration, 3) + "s");
 }
 
 void GrooveBrowser::handleColumnDoubleClick(int columnIndex, int row)
@@ -1265,7 +1298,7 @@ void GrooveBrowser::handleMidiFileSelection(const juce::File& midiFile)
             addPartsColumn();
         }
 
-        partsColumn->setDrumParts(currentDrumParts, midiFile);
+        partsColumn->setDrumParts(currentDrumParts, midiFile, currentSourceLibrary);
         updateColumnsLayout();
 
         DBG("MIDI file dissected: " + midiFile.getFileName() +
@@ -1327,6 +1360,9 @@ bool GrooveBrowser::keyPressed(const juce::KeyPress& key)
             // Stop playback
             processor.midiProcessor.pause();
             browserPlaybackActive = false;
+            currentlyPlayingRow = -1;
+            currentlyPlayingColumn = nullptr;
+            playbackProgress = 0.0f;
             DBG("GrooveBrowser: Space bar pressed - Pausing playback");
         }
         else if (browserPlaybackActive && currentlyPlayingFile.existsAsFile())
@@ -1356,6 +1392,19 @@ bool GrooveBrowser::keyPressed(const juce::KeyPress& key)
 
 void GrooveBrowser::timerCallback()
 {
+    // Update playback progress for visual indicator
+    if (browserPlaybackActive)
+    {
+        double position = processor.midiProcessor.getPlayheadPosition();
+        double loopEnd = processor.midiProcessor.getLoopEnd();
+
+        if (loopEnd > 0.0)
+        {
+            playbackProgress = static_cast<float>(position / loopEnd);
+            playbackProgress = juce::jlimit(0.0f, 1.0f, playbackProgress);
+        }
+    }
+
     // Update hover states
     for (auto* column : folderColumns)
     {
@@ -1450,6 +1499,7 @@ void GrooveBrowser::addFolderColumn(const juce::String& title, bool isFileColumn
     column->setSize(isFileColumn ? FILE_COLUMN_WIDTH : FOLDER_COLUMN_WIDTH, COLUMN_HEIGHT_MIN);
 
     folderColumns.add(column);
+    column->browser = this;
     columnsContainer.addAndMakeVisible(column);
 
     updateColumnsLayout();
@@ -1701,7 +1751,7 @@ void GrooveBrowser::handleColumnSelection(int columnIndex)
                 addPartsColumn();
             }
 
-            partsColumn->setDrumParts(currentDrumParts, currentMidiFile);
+            partsColumn->setDrumParts(currentDrumParts, currentMidiFile, currentSourceLibrary);
             updateColumnsLayout();
 
             DBG("MIDI file dissected: " + currentMidiFile.getFileName() +
@@ -2287,6 +2337,7 @@ void GrooveBrowser::showSamplesManager()
     samplesManagerWindow->setUsingNativeTitleBar(true);
     samplesManagerWindow->setContentOwned(content, true);
     samplesManagerWindow->setResizable(true, false);
+    samplesManagerWindow->setSize(1500, 900);
     samplesManagerWindow->centreWithSize(1500, 900);
 
     content->onClose = [this]() {

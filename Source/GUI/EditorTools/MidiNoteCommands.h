@@ -1,7 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "EditableMidiClip.h"
+#include "../Components/EditableMidiClip.h"
 
 // Base command class
 class MidiNoteCommand

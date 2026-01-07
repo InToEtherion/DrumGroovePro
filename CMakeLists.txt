@@ -38,18 +38,23 @@ juce_add_plugin(DrumGroovePro
 # Generate JUCE header
 juce_generate_juce_header(DrumGroovePro)
 
-# Add source files - Complete list with proper structure INCLUDING NEW SECTION FILES
+# Source files
 target_sources(DrumGroovePro PRIVATE
+    # Main plugin files
     Source/PluginProcessor.cpp
     Source/PluginEditor.cpp
-    Source/EditableMidiClip.cpp
-    Source/MidiEditorToolbar.cpp
-    Source/DrumGridView.cpp
-    Source/MidiEditorComponent.cpp
+
+    # GUI Main
     Source/GUI/MainComponent.cpp
-    Source/GUI/SampleDownloadDialog.cpp
-    Source/GUI/SamplesManagerWindow.cpp
-    Source/GUI/EQPresetManager.cpp
+
+    # GUI Components
+    Source/GUI/Components/EditableMidiClip.cpp
+    Source/GUI/Components/MidiEditorToolbar.cpp
+    Source/GUI/Components/DrumGridView.cpp
+    Source/GUI/Components/MidiEditorComponent.cpp
+    Source/GUI/Components/SampleDownloadDialog.cpp
+    Source/GUI/Components/SamplesManagerWindow.cpp
+    Source/GUI/Components/EQPresetManager.cpp
     Source/GUI/Components/BatchRemapDialog.h
     Source/GUI/Components/BatchRemapDialog.cpp
     Source/GUI/Components/HeaderSection.cpp
@@ -68,15 +73,22 @@ target_sources(DrumGroovePro PRIVATE
     Source/GUI/Components/SectionBar.cpp
     Source/GUI/Components/DrumLibraryMappingEditor.cpp
     Source/GUI/Components/OriginLibraryEditor.cpp
+    Source/GUI/Components/CustomColourPicker.cpp
     Source/GUI/Components/AudioTrack.cpp
     Source/GUI/Components/AudioTrackHeader.cpp
     Source/GUI/Components/VelocityLaneComponent.cpp
+
+    # GUI LookAndFeel
     Source/GUI/LookAndFeel/DrumGrooveLookAndFeel.cpp
+
+    # Core logic
     Source/Core/MidiProcessor.cpp
     Source/Core/MidiDissector.cpp
     Source/Core/DrumLibraryManager.cpp
     Source/Core/FavoritesManager.cpp
     Source/Core/SectionManager.cpp
+
+    # Utils
     Source/Utils/OpenGLUtils.cpp
     Source/Utils/SampleDownloader.cpp
     Source/Utils/DrumMixer.cpp

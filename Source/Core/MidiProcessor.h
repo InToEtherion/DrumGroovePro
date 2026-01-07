@@ -69,6 +69,8 @@ public:
 
     double getVisualLatencyOffsetMs() const { return visualLatencyOffsetSeconds.load() * 1000.0; }
 
+    double getLoopEnd() const { return loopEnd; }
+
 private:
     DrumLibraryManager& drumLibraryManager;
     double sampleRate = 44100.0;

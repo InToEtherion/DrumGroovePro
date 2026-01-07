@@ -10,6 +10,7 @@ class DrumGrooveProcessor;
 class DrumPartsColumn;
 class BrowserColumn;
 class SamplesManagerWindow;
+class GrooveBrowser;
 
 // Custom component that handles CTRL+Drag independently from ListBox
 class DraggableListItemOverlay : public juce::Component
@@ -73,6 +74,8 @@ public:
     juce::Array<bool> itemIsFolder;
     juce::Array<juce::File> itemFiles;
 
+    GrooveBrowser* browser = nullptr;
+
 private:
     void loadIcons();
 
@@ -94,6 +97,7 @@ private:
 
     DrumLibrary detectLibraryFromPath(const juce::File& file);
 
+
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(BrowserColumn)
 };
 
@@ -104,6 +108,7 @@ public juce::DragAndDropContainer,
             public juce::KeyListener,
                 private juce::Timer
                 {
+                    friend class BrowserColumn;
                 public:
                     explicit GrooveBrowser(DrumGrooveProcessor& processor);
                     ~GrooveBrowser() override;
@@ -158,6 +163,11 @@ public juce::DragAndDropContainer,
 
                     // BPM monitoring for real-time updates
                     double lastKnownBPM = 120.0;
+                    double currentReferenceBPM = 120.0;
+
+                    int currentlyPlayingRow = -1;
+                    BrowserColumn* currentlyPlayingColumn = nullptr;
+                    float playbackProgress = 0.0f; // 0.0 to 1.0
 
                     // Column management
                     juce::OwnedArray<BrowserColumn> folderColumns;

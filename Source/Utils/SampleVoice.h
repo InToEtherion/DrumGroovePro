@@ -27,7 +27,7 @@ public:
     // Start playing a sample with drum part assignment
     // startSampleInBlock: the sample offset within the current block where playback should begin
     void trigger(const juce::AudioBuffer<float>* buffer, float volumeDb, int midiNote,
-                 int velocity, int drumPart, int startSampleInBlock = 0);
+                 int velocity, int drumPart, int startSampleInBlock, float ampVeltrack = 100.0f);
 
     // Stop playing immediately (hard stop)
     void stop();
@@ -70,6 +70,8 @@ private:
     // Combined gain from sample volume (dB) and velocity
     float combinedGainLinear { 1.0f };
 
+    float ampVeltrack = 100.0f;
+
     std::atomic<bool> active { false };
     std::atomic<int> currentNote { -1 };
     std::atomic<int> currentVelocity { 0 };
@@ -106,11 +108,11 @@ private:
         if (velocity >= 127)
             return 1.0f;
 
-        // Linear mapping: velocity / 127
-        // Could use curve for more natural response: pow(velocity / 127.0f, 0.5f)
-        // Using linear for predictability
+        // IMPROVED VELOCITY CURVE: Gentle power curve (1.2)
+        // Not as aggressive as 1.5, but better than linear
+        // Makes low velocities more audible without excessive attenuation
         float normalizedVel = static_cast<float>(velocity) / 127.0f;
-        return normalizedVel;
+        return std::pow(normalizedVel, 1.2f);
     }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(SampleVoice)

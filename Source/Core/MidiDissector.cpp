@@ -85,92 +85,99 @@ DrumPartType MidiDissector::getPartTypeFromNote(uint8_t midiNote, DrumLibrary so
                             }
                             break;
 
-                                default:
+                                case DrumLibrary::SalamanderDrumkit:
+                                    switch (midiNote)
+                                    {
+                                        // Kicks
+                                        case 35: case 36: return DrumPartType::Kick;
+
+                                        // Snares (37/39 are rim-off, 38/40 are normal)
+                                        case 37: case 38: case 39: case 40: return DrumPartType::Snare;
+                                        case 41: return DrumPartType::Snare;  // Snare Stick
+
+                                        // Hi-hats
+                                        case 42: return DrumPartType::HiHatClosed;
+                                        case 44: return DrumPartType::HiHatClosed;  // Foot
+                                        case 46: return DrumPartType::HiHatOpen;
+
+                                        // Toms (43=Lo, 45=Hi, 48=Mid)
+                                        case 43: return DrumPartType::FloorTom;
+                                        case 45: return DrumPartType::Tom1;
+                                        case 48: return DrumPartType::Tom2;
+                                        case 50: return DrumPartType::Tom2;  // If present
+
+                                        // CRITICAL: Cowbell is 47, NOT a tom!
+                                        case 47: return DrumPartType::Cowbell;
+
+                                        // Cymbals (52=Ride, 55-64=Crashes/Chinas/Effects)
+                                        case 52: case 53: case 59: return DrumPartType::Ride;
+                                        case 49: case 51: case 55: case 56: case 57: case 58:
+                                        case 60: case 61: case 62: case 63: case 64:
+                                            return DrumPartType::Crash;
+
+                                        default: break;
+                                    }
                                     break;
+
+                                        default:
+                                            break;
     }
 
     // ==========================================================================
-    // Standard General MIDI / salamanderDrumkit mappings
-    // Updated to match actual salamanderDrumkit SFZ note assignments
+    // Standard General MIDI fallback
     // ==========================================================================
     switch (midiNote)
     {
-        // Extended low range - some libraries use these
-        case 32:  // Some libraries: Extra kick or low tom
-        case 33:  // Some libraries: Extra kick
-        case 34:  // Some libraries: Extra kick
+        // Extended low range
+        case 32: case 33: case 34:
             return DrumPartType::Kick;
 
-            // Kicks (35=Kick1, 36=Kick2)
-        case 35:
-        case 36:
+            // Kicks
+        case 35: case 36:
             return DrumPartType::Kick;
 
-            // Snares (37=Side Stick, 38=Acoustic Snare, 40=Electric Snare)
-        case 37:  // Side Stick
-        case 38:  // Acoustic Snare
-        case 40:  // Electric Snare
+            // Snares
+        case 37: case 38: case 40:
             return DrumPartType::Snare;
 
             // Hand Clap
-        case 39:  // Hand Clap
+        case 39:
             return DrumPartType::Clap;
 
-            // Hi-hats (42=closed, 44=pedal, 46=open)
-        case 42:  // Hi-Hat Closed
-        case 44:  // Hi-Hat Pedal / Foot
+            // Hi-hats
+        case 42: case 44:
             return DrumPartType::HiHatClosed;
-
-        case 46:  // Hi-Hat Open
+        case 46:
             return DrumPartType::HiHatOpen;
 
-            // Toms (41=Low Floor Tom, 43=High Floor Tom, 45=Low Tom, 47=Low-Mid Tom, 48=Hi-Mid Tom, 50=High Tom)
-        case 41:  // Low Floor Tom
-        case 43:  // High Floor Tom
+            // Toms
+        case 41: case 43:
             return DrumPartType::FloorTom;
-
-        case 45:  // Low Tom
-        case 47:  // Low-Mid Tom
+        case 45: case 47:
             return DrumPartType::Tom1;
-
-        case 48:  // Hi-Mid Tom
-        case 50:  // High Tom
+        case 48: case 50:
             return DrumPartType::Tom2;
 
             // Cymbals
-        case 49:  // Crash Cymbal 1
+        case 49:
             return DrumPartType::Crash;
-
-        case 51:  // Ride Cymbal 1
-        case 53:  // Ride Bell
+        case 51: case 53:
             return DrumPartType::Ride;
-
-        case 52:  // Chinese Cymbal
-        case 55:  // Splash Cymbal
-        case 57:  // Crash Cymbal 2
+        case 52: case 55: case 57:
             return DrumPartType::Crash;
 
             // Percussion
-        case 54:  // Tambourine
+        case 54:
             return DrumPartType::Shaker;
-        case 56:  // Cowbell
+        case 56:
             return DrumPartType::Cowbell;
 
-            // Extended Crashes, Chinas, Effects (58-64)
-        case 58:  // Vibraslap (but often used as China in some libraries)
-        case 59:  // Ride Cymbal 2
+            // Extended
+        case 58: case 59:
             return DrumPartType::Ride;
-
-        case 60:  // Hi Bongo
-        case 61:  // Low Bongo
-        case 62:  // Mute Hi Conga
-        case 63:  // Open Hi Conga
-        case 64:  // Low Conga
-            return DrumPartType::Other;  // Percussion
-
-            // Extended range - Shakers/Percussion (GM standard)
-        case 69:  // Cabasa
-        case 70:  // Maracas
+        case 60: case 61: case 62: case 63: case 64:
+            return DrumPartType::Other;
+        case 69: case 70:
             return DrumPartType::Shaker;
 
         default:
@@ -243,21 +250,9 @@ void MidiDissector::analyzeSequence(const juce::MidiMessageSequence& sequence,
                                     DrumLibrary targetLibrary,
                                     const DrumLibraryManager* libraryManager) const
                                     {
-                                        std::map<DrumPartType, DrumPart> partMap;
-
-                                        // Initialize all possible parts
-                                        for (int i = 0; i < static_cast<int>(DrumPartType::COUNT); ++i)
-                                        {
-                                            DrumPartType partType = static_cast<DrumPartType>(i);
-                                            DrumPart part;
-                                            part.type = partType;
-                                            part.name = getPartShortName(partType);
-                                            part.displayName = getPartDisplayName(partType);
-                                            part.colour = getPartColour(partType);
-                                            part.eventCount = 0;
-                                            part.duration = 0.0;
-                                            partMap[partType] = part;
-                                        }
+                                        // CRITICAL FIX: Use ORIGINAL note as key to prevent grouping
+                                        // Each original MIDI note gets its own separate row
+                                        std::map<uint8_t, DrumPart> partMap;
 
                                         // Process each MIDI event
                                         for (int i = 0; i < sequence.getNumEvents(); ++i)
@@ -270,31 +265,64 @@ void MidiDissector::analyzeSequence(const juce::MidiMessageSequence& sequence,
 
                                                 // Remap note to target library for playback
                                                 uint8_t finalNote = originalNote;
-                                                // FIXED: Bypass means NO remapping at all
                                                 bool isRemapping = (sourceLibrary != targetLibrary) && (targetLibrary != DrumLibrary::Bypass);
                                                 if (libraryManager && isRemapping)
                                                 {
                                                     finalNote = libraryManager->mapNoteToLibrary(originalNote, sourceLibrary, targetLibrary);
                                                 }
 
-                                                // Categorize based on TARGET library (what the note becomes after remapping)
+                                                // Categorize based on TARGET library
                                                 DrumPartType partType = getPartTypeFromNote(finalNote, targetLibrary);
 
                                                 if (partType != DrumPartType::Other || isValidDrumNote(originalNote))
                                                 {
-                                                    auto& part = partMap[partType];
+                                                    // CRITICAL: Use ORIGINAL note as key, not finalNote
+                                                    if (partMap.find(originalNote) == partMap.end())
+                                                    {
+                                                        DrumPart part;
+                                                        part.type = partType;
+                                                        part.eventCount = 0;
+                                                        part.duration = 0.0;
+
+                                                        // Get name from TARGET library for the REMAPPED note
+                                                        if (libraryManager != nullptr && libraryManager->hasCustomDrumName(targetLibrary, finalNote))
+                                                        {
+                                                            juce::String customName = libraryManager->getCustomDrumName(targetLibrary, finalNote);
+                                                            if (customName.isNotEmpty())
+                                                            {
+                                                                part.displayName = customName;
+                                                                part.name = customName;
+                                                            }
+                                                            else
+                                                            {
+                                                                part.name = getPartShortName(partType);
+                                                                part.displayName = getPartDisplayName(partType);
+                                                            }
+                                                        }
+                                                        else
+                                                        {
+                                                            part.name = getPartShortName(partType);
+                                                            part.displayName = getPartDisplayName(partType);
+                                                        }
+
+                                                        // Get color from target library
+                                                        part.colour = getColourForNote(finalNote, targetLibrary, libraryManager);
+
+                                                        partMap[originalNote] = part;  // KEY CHANGE: Use originalNote
+                                                    }
+
+                                                    auto& part = partMap[originalNote];  // KEY CHANGE: Use originalNote
 
                                                     // Store original note
                                                     part.originalNotes.addIfNotAlreadyThere(originalNote);
 
-                                                    // Store remapped note when source != target (even if note number is same)
-                                                    // This shows what the note means in the target library context
+                                                    // Store remapped note
                                                     if (isRemapping)
                                                     {
                                                         part.remappedNotes.addIfNotAlreadyThere(finalNote);
                                                     }
 
-                                                    // Create note-on with remapped note
+                                                    // Create note-on with remapped note for playback
                                                     juce::MidiMessage processedMsg = juce::MidiMessage::noteOn(msg.getChannel(),
                                                                                                                finalNote,
                                                                                                                static_cast<juce::uint8>(msg.getVelocity()));
@@ -313,71 +341,38 @@ void MidiDissector::analyzeSequence(const juce::MidiMessageSequence& sequence,
                                             {
                                                 uint8_t originalNote = static_cast<uint8_t>(msg.getNoteNumber());
 
-                                                // Remap note-off to target library
+                                                // Remap note-off
                                                 uint8_t finalNote = originalNote;
-                                                // FIXED: Bypass means NO remapping
                                                 if (libraryManager && sourceLibrary != targetLibrary && targetLibrary != DrumLibrary::Bypass)
                                                 {
                                                     finalNote = libraryManager->mapNoteToLibrary(originalNote, sourceLibrary, targetLibrary);
                                                 }
 
-                                                // Categorize based on TARGET library
                                                 DrumPartType partType = getPartTypeFromNote(finalNote, targetLibrary);
 
                                                 if (partType != DrumPartType::Other || isValidDrumNote(originalNote))
                                                 {
-                                                    auto& part = partMap[partType];
+                                                    // KEY CHANGE: Use originalNote as key
+                                                    if (partMap.find(originalNote) != partMap.end())
+                                                    {
+                                                        auto& part = partMap[originalNote];
 
-                                                    // Create note-off with remapped note
-                                                    juce::MidiMessage processedMsg = juce::MidiMessage::noteOff(msg.getChannel(), finalNote);
-                                                    processedMsg.setTimeStamp(msg.getTimeStamp());
+                                                        juce::MidiMessage processedMsg = juce::MidiMessage::noteOff(msg.getChannel(), finalNote);
+                                                        processedMsg.setTimeStamp(msg.getTimeStamp());
 
-                                                    part.sequence.addEvent(processedMsg);
+                                                        part.sequence.addEvent(processedMsg);
+                                                    }
                                                 }
                                             }
                                         }
 
                                         // Add non-empty parts to result
-                                        for (auto& [type, part] : partMap)
+                                        for (auto& [noteNum, part] : partMap)
                                         {
                                             if (part.eventCount > 0)
                                             {
                                                 part.sequence.sort();
                                                 part.sequence.updateMatchedPairs();
-
-                                                // Check for custom drum name from target library
-                                                // Priority: 1) Custom name from target, 2) Hardcoded name, 3) "Other"
-                                                if (libraryManager != nullptr && !part.remappedNotes.isEmpty())
-                                                {
-                                                    // Use the first remapped note to look up custom name
-                                                    uint8_t primaryNote = part.remappedNotes[0];
-
-                                                    if (libraryManager->hasCustomDrumName(targetLibrary, primaryNote))
-                                                    {
-                                                        juce::String customName = libraryManager->getCustomDrumName(targetLibrary, primaryNote);
-                                                        if (customName.isNotEmpty())
-                                                        {
-                                                            part.displayName = customName;
-                                                            DBG("Using custom name for note " + juce::String(primaryNote) + ": " + customName);
-                                                        }
-                                                    }
-                                                }
-                                                else if (libraryManager != nullptr && !part.originalNotes.isEmpty())
-                                                {
-                                                    // No remapping - check original notes against target library
-                                                    uint8_t primaryNote = part.originalNotes[0];
-
-                                                    if (libraryManager->hasCustomDrumName(targetLibrary, primaryNote))
-                                                    {
-                                                        juce::String customName = libraryManager->getCustomDrumName(targetLibrary, primaryNote);
-                                                        if (customName.isNotEmpty())
-                                                        {
-                                                            part.displayName = customName;
-                                                            DBG("Using custom name for note " + juce::String(primaryNote) + ": " + customName);
-                                                        }
-                                                    }
-                                                }
-
                                                 parts.add(part);
                                             }
                                         }
@@ -531,6 +526,21 @@ void MidiDissector::analyzeSequence(const juce::MidiMessageSequence& sequence,
                                             case DrumPartType::Other: return juce::Colour(0xff888888);
                                             default: return juce::Colour(0xff666666);
                                         }
+                                    }
+
+                                    juce::Colour MidiDissector::getColourForNote(uint8_t midiNote, DrumLibrary library,
+                                                                                 const DrumLibraryManager* libraryManager)
+                                    {
+                                        if (!libraryManager)
+                                        {
+                                            DrumPartType partType = getPartTypeFromNote(midiNote, library);
+                                            return getPartColour(partType);
+                                        }
+
+                                        // Use the new reverse-lookup method that finds GM note from target note
+                                        // This correctly handles custom colors for target libraries
+                                        DBG("MidiDissector::getColourForNote called - note: " + juce::String(midiNote) + ", library: " + DrumLibraryManager::getLibraryName(library));
+                                        return libraryManager->getColourForTargetNote(library, midiNote);
                                     }
 
                                     bool MidiDissector::isValidDrumNote(uint8_t midiNote)

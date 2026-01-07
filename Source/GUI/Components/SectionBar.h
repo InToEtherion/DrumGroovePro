@@ -1,7 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "SectionManager.h"
+#include "../../Core/SectionManager.h"
 
 class DrumGrooveProcessor;
 

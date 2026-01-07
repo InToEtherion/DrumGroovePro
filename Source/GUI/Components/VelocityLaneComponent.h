@@ -11,7 +11,8 @@ class DrumGridView;
 class VelocityLaneComponent : public juce::Component
 {
 public:
-    VelocityLaneComponent(EditableMidiClip& clip, DrumGridView& gridView);
+    VelocityLaneComponent(EditableMidiClip& clip, DrumGridView& gridView,
+                          DrumLibraryManager& libMgr);
     ~VelocityLaneComponent() override;
 
     void paint(juce::Graphics& g) override;
@@ -34,6 +35,7 @@ public:
 
 private:
     EditableMidiClip& clip;
+    DrumLibraryManager& drumLibraryManager;
     DrumGridView& gridView;
     float zoomFactor = 1.0f;
 
@@ -50,7 +52,7 @@ private:
     MidiNote* getNoteAtPosition(int x, int y);
     int velocityFromY(int y) const;
     int yFromVelocity(int velocity) const;
-    juce::Colour getColourForDrumPart(DrumPartType partType, bool selected) const;
+    juce::Colour getColourForDrumPart(const MidiNote& note, bool selected) const;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR(VelocityLaneComponent)
 };

@@ -452,9 +452,13 @@ void Track::drawMidiDotsInClip(juce::Graphics& g, const MidiClip& clip, juce::Re
                 juce::Colour noteColour;
                 if (isFullMidiFile)
                 {
-                    // For full MIDI files: color each note based on its drum part type
-                    DrumPartType notePartType = MidiDissector::getPartTypeFromNote(static_cast<uint8_t>(event.getNoteNumber()));
-                    noteColour = MidiDissector::getPartColour(notePartType).brighter(0.3f);
+                    uint8_t noteNumber = static_cast<uint8_t>(event.getNoteNumber());
+                    DrumLibrary sourceLib = clip.sourceLibrary;
+
+                    noteColour = MidiDissector::getColourForNote(
+                        noteNumber,
+                        sourceLib,
+                        &processor.drumLibraryManager).brighter(0.3f);
                 }
                 else
                 {

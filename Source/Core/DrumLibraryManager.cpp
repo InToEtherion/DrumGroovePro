@@ -6,25 +6,35 @@ DrumLibraryManager::DrumLibraryManager()
     loadConfiguration();
     loadOriginLibraries();
 
-    juce::File mappingFile = getCustomMappingsFile();
+    juce::File targetMappingFile = getCustomMappingsFile();
+    juce::File originMappingFile = getOriginMappingsFile();
 
-    if (!mappingFile.existsAsFile())
+    bool hasTargetXML = targetMappingFile.existsAsFile();
+    bool hasOriginXML = originMappingFile.existsAsFile();
+
+    if (!hasTargetXML)
     {
-        // File doesn't exist - initialize all libraries and create the file
-        DBG("No target drum mapping file found - creating complete default file");
-        initializeMappingTables();  // Create all libraries with identity mappings
-        createDefaultMappingsFile(); // Save to disk
+        DBG("No target mapping XML - creating default");
+        initializeMappingTables();
+        createDefaultMappingsFile();
     }
     else
     {
-        // File exists - ONLY load what's in it, don't add anything
-        DBG("Target drum mapping file exists - loading ONLY from file");
-        // DO NOT call initializeHardcodedMappings() - let XML be the only source
-        loadCustomMappings();  // Load everything from XML file
+        DBG("Target XML exists - loading only from file");
+        loadCustomMappings();
     }
 
-    // Load origin mappings AFTER target mappings (so they override defaults)
-    loadOriginMappings();
+    if (hasOriginXML)
+    {
+        DBG("Origin XML exists - loading only from file");
+        loadOriginMappings();
+    }
+    else
+    {
+        DBG("No origin XML - creating from hardcoded mappings");
+        initializeHardcodedMappings();
+        saveOriginMappings();
+    }
 }
 
 DrumLibraryManager::~DrumLibraryManager()
@@ -1180,7 +1190,7 @@ void DrumLibraryManager::saveConfiguration()
     }
 }
 
-juce::StringArray DrumLibraryManager::getLoadedLibraryNames()
+juce::StringArray DrumLibraryManager::getLoadedLibraryNames() const
 {
     juce::StringArray names;
 
@@ -1202,16 +1212,16 @@ juce::StringArray DrumLibraryManager::getLoadedLibraryNames()
 
         // Check if there are mappings from this library to GM (libIdx -> 0)
         if (mappings.find(libIdx) != mappings.end() &&
-            mappings[libIdx].find(0) != mappings[libIdx].end() &&
-            !mappings[libIdx][0].empty())
+            mappings.at(libIdx).find(0) != mappings.at(libIdx).end() &&
+            !mappings.at(libIdx).at(0).empty())
         {
             hasMapping = true;
         }
 
         // Check if there are mappings from GM to this library (0 -> libIdx)
         if (mappings.find(0) != mappings.end() &&
-            mappings[0].find(libIdx) != mappings[0].end() &&
-            !mappings[0][libIdx].empty())
+            mappings.at(0).find(libIdx) != mappings.at(0).end() &&
+            !mappings.at(0).at(libIdx).empty())
         {
             hasMapping = true;
         }
@@ -1440,7 +1450,7 @@ juce::StringArray DrumLibraryManager::getAllSourceLibraryNames()
     return sortedOrigins;
 }
 
-DrumLibrary DrumLibraryManager::getLibraryFromName(const juce::String& name)
+DrumLibrary DrumLibraryManager::getLibraryFromName(const juce::String& name) const
 {
     // Map library names back to enum values
     if (name == "General MIDI") return DrumLibrary::GeneralMIDI;
@@ -1609,6 +1619,11 @@ void DrumLibraryManager::saveCustomMappings()
                 {
                     noteElement->setAttribute("customName", getCustomDrumName(library, notePair.first));
                 }
+                if (hasCustomNoteColour(library, notePair.first))
+                {
+                    juce::Colour colour = getCustomNoteColour(library, notePair.first);
+                    noteElement->setAttribute("colour", colour.toString());
+                }
             }
         }
     }
@@ -1724,6 +1739,12 @@ void DrumLibraryManager::loadCustomMappings()
                     {
                         customDrumNames[libIndex][gmNote] = customName;
                     }
+                    juce::String colourString = noteElement->getStringAttribute("colour");
+                    if (colourString.isNotEmpty())
+                    {
+                        juce::Colour colour = juce::Colour::fromString(colourString);
+                        customNoteColours[libIndex][gmNote] = colour.getARGB();
+                    }
 
                     mappingCount++;
                     totalMappingsLoaded++;
@@ -1778,10 +1799,6 @@ void DrumLibraryManager::loadCustomMappings()
 
     DBG("Loaded " + juce::String(librariesLoaded) + " libraries with " +
     juce::String(totalMappingsLoaded) + " total mappings");
-
-    // IMPORTANT: Apply hardcoded special mappings AFTER loading from file
-    // This ensures Ugritone, Salamander and other special ORIGIN mappings are always present
-    initializeHardcodedMappings();
 }
 
 bool DrumLibraryManager::hasCustomMappings() const
@@ -2008,6 +2025,11 @@ void DrumLibraryManager::saveOriginMappings()
             {
                 noteElement->setAttribute("customName", getCustomDrumName(lib, gmNote));
             }
+            if (hasCustomNoteColour(lib, gmNote))
+            {
+                juce::Colour colour = getCustomNoteColour(lib, gmNote);
+                noteElement->setAttribute("colour", colour.toString());
+            }
         }
     }
 
@@ -2079,6 +2101,12 @@ void DrumLibraryManager::loadOriginMappings()
             if (customName.isNotEmpty())
             {
                 customDrumNames[originIndex][gmNote] = customName;
+            }
+            juce::String colourString = noteElement->getStringAttribute("colour");
+            if (colourString.isNotEmpty())
+            {
+                juce::Colour colour = juce::Colour::fromString(colourString);
+                customNoteColours[originIndex][gmNote] = colour.getARGB();
             }
         }
 
@@ -2526,4 +2554,105 @@ juce::String DrumLibraryManager::getDrumPartName(DrumPartType part, DrumLibrary 
 
     // No custom name found, use General MIDI descriptive name
     return getGMDrumName(gmNote);
+}
+
+void DrumLibraryManager::setCustomNoteColour(DrumLibrary library, uint8_t gmNote, const juce::Colour& colour)
+{
+    int libIndex = static_cast<int>(library) - 2;
+    customNoteColours[libIndex][gmNote] = colour.getARGB();
+}
+
+juce::Colour DrumLibraryManager::getCustomNoteColour(DrumLibrary library, uint8_t gmNote) const
+{
+    int libIndex = static_cast<int>(library) - 2;
+
+    if (customNoteColours.find(libIndex) != customNoteColours.end())
+    {
+        const auto& libColours = customNoteColours.at(libIndex);
+        if (libColours.find(gmNote) != libColours.end())
+            return juce::Colour(libColours.at(gmNote));
+    }
+
+    return getDefaultColourForGMNote(gmNote);
+}
+
+bool DrumLibraryManager::hasCustomNoteColour(DrumLibrary library, uint8_t gmNote) const
+{
+    int libIndex = static_cast<int>(library) - 2;
+
+    if (customNoteColours.find(libIndex) != customNoteColours.end())
+        return customNoteColours.at(libIndex).find(gmNote) != customNoteColours.at(libIndex).end();
+
+    return false;
+}
+
+void DrumLibraryManager::clearCustomNoteColour(DrumLibrary library, uint8_t gmNote)
+{
+    int libIndex = static_cast<int>(library) - 2;
+
+    if (customNoteColours.find(libIndex) != customNoteColours.end())
+        customNoteColours[libIndex].erase(gmNote);
+}
+
+bool DrumLibraryManager::hasAnyCustomColours(DrumLibrary library) const
+{
+    int libIndex = static_cast<int>(library) - 2;
+    return customNoteColours.find(libIndex) != customNoteColours.end() &&
+    !customNoteColours.at(libIndex).empty();
+}
+
+juce::Colour DrumLibraryManager::getDefaultColourForGMNote(uint8_t gmNote)
+{
+    DrumPartType partType = MidiDissector::getPartTypeFromNote(gmNote, DrumLibrary::GeneralMIDI);
+    return MidiDissector::getPartColour(partType);
+}
+
+juce::Colour DrumLibraryManager::getColourForTargetNote(DrumLibrary library, uint8_t targetNote) const
+{
+    DBG(">>> getColourForTargetNote: library=" + getLibraryName(library) + ", targetNote=" + juce::String(targetNote));
+
+    if (library == DrumLibrary::Unknown || library == DrumLibrary::Bypass)
+        return getDefaultColourForGMNote(targetNote);
+
+    int libIdx = static_cast<int>(library) - 2;
+    DBG("  libIdx=" + juce::String(libIdx));
+
+    // Always do reverse lookup: find which GM note maps to this target note
+    if (mappings.find(0) != mappings.end() &&
+        mappings.at(0).find(libIdx) != mappings.at(0).end())
+    {
+        const auto& gmToTargetMap = mappings.at(0).at(libIdx);
+        DBG("  -> Searching " + juce::String(gmToTargetMap.size()) + " GM->Target mappings");
+
+        // Find which GM note maps to this target note
+        for (const auto& [gmNote, mappedTargetNote] : gmToTargetMap)
+        {
+            if (mappedTargetNote == targetNote)
+            {
+                DBG("  -> MATCH: GM " + juce::String(gmNote) + " -> Target " + juce::String(targetNote));
+                DBG("  -> hasCustomColor(" + juce::String(gmNote) + ")=" + juce::String(hasCustomNoteColour(library, gmNote) ? "YES" : "NO"));
+
+                // Found the GM note - check if it has custom color
+                if (hasCustomNoteColour(library, gmNote))
+                {
+                    auto col = getCustomNoteColour(library, gmNote);
+                    DBG("  -> Returning custom: " + col.toString());
+                    return col;
+                }
+
+                DBG("  -> Returning default for GM " + juce::String(gmNote));
+                return getDefaultColourForGMNote(gmNote);
+            }
+        }
+
+        DBG("  -> No match found for target note " + juce::String(targetNote));
+    }
+    else
+    {
+        DBG("  -> No GM->Target mapping exists for this library");
+    }
+
+    // No mapping found - use default
+    DBG("  -> Using default color for note " + juce::String(targetNote));
+    return getDefaultColourForGMNote(targetNote);
 }

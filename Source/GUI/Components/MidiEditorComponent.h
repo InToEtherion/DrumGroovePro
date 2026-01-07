@@ -7,7 +7,7 @@
 #include "VelocityLaneComponent.h"
 #include "DrumLibraryManager.h"
 #include "MidiProcessor.h"
-#include "MidiNoteCommands.h"
+#include "../EditorTools/MidiNoteCommands.h"
 
 // Forward declaration
 class DrumGrooveProcessor;
@@ -83,6 +83,9 @@ private:
         double loopStartQN = 0.0;
         double loopEndQN = 4.0;
         bool velocityLaneVisible = false;
+
+        juce::Label originMappingLabel;
+        juce::Label targetMappingLabel;
 
         EditableMidiClip& clip;
         MidiProcessor& midiProcessor;

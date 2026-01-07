@@ -1,30 +1,53 @@
 #include "AboutDialog.h"
 #include "../LookAndFeel/ColourPalette.h"
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
+#include <utility>  // For std::pair
 
-#define CURRENT_VERSION "1.0.0RC1"
+#define CURRENT_VERSION "1.0.0RC2"
 #define GITHUB_RELEASES_API "https://api.github.com/repos/InToEtherion/DrumGroovePro/releases"
 
 // Semantic version comparison
 static int compareVersions(const juce::String& v1, const juce::String& v2)
 {
-    auto parts1 = juce::StringArray::fromTokens(v1, ".", "");
-    auto parts2 = juce::StringArray::fromTokens(v2, ".", "");
-    
-    // Ensure at least 3 parts (major.minor.patch)
-    while (parts1.size() < 3) parts1.add("0");
-    while (parts2.size() < 3) parts2.add("0");
-    
+    auto extractVersionParts = [](const juce::String& version) -> std::pair<juce::StringArray, int>
+    {
+        juce::String upperVersion = version.toUpperCase();
+        int rcNumber = -1;  // -1 = final release
+        juce::String baseVersion = version;
+
+        int rcPos = upperVersion.indexOf("RC");
+        if (rcPos >= 0)
+        {
+            juce::String rcPart = version.substring(rcPos + 2);
+            rcNumber = rcPart.getIntValue();
+            if (rcNumber == 0) rcNumber = 1;
+            baseVersion = version.substring(0, rcPos);
+        }
+
+        auto parts = juce::StringArray::fromTokens(baseVersion, ".", "");
+        while (parts.size() < 3) parts.add("0");
+
+        return {parts, rcNumber};
+    };
+
+    auto [parts1, rc1] = extractVersionParts(v1);
+    auto [parts2, rc2] = extractVersionParts(v2);
+
     for (int i = 0; i < 3; ++i)
     {
         int num1 = parts1[i].getIntValue();
         int num2 = parts2[i].getIntValue();
-        
-        if (num1 > num2) return 1;   // v1 is newer
-        if (num1 < num2) return -1;  // v2 is newer
+
+        if (num1 > num2) return 1;
+        if (num1 < num2) return -1;
     }
-    
-    return 0; // versions are equal
+
+    if (rc1 == rc2) return 0;
+    if (rc1 == -1) return 1;  // Final > RC
+    if (rc2 == -1) return -1;
+
+    if (rc1 > rc2) return 1;
+    return -1;
 }
 
 AboutDialog::AboutDialog()

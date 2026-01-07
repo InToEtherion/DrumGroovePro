@@ -4,12 +4,14 @@
 std::atomic<juce::int64> SampleVoice::globalTriggerCounter { 0 };
 
 void SampleVoice::trigger(const juce::AudioBuffer<float>* buffer, float volumeDb,
-                          int midiNote, int velocity, int drumPart, int startSampleInBlock)
+                          int midiNote, int velocity, int drumPart, int startSampleInBlock, float veltrack)
 {
     if (buffer == nullptr || buffer->getNumSamples() == 0)
     {
         return;
     }
+
+    ampVeltrack = veltrack;
 
     // Reset fade-out state if this voice was being stolen
     fadingOut.store(false, std::memory_order_relaxed);
@@ -24,6 +26,17 @@ void SampleVoice::trigger(const juce::AudioBuffer<float>* buffer, float volumeDb
     // velocity comes from MIDI note-on message (0-127)
     float sampleGain = dbToLinear(volumeDb);
     float velocityGain = velocityToGain(velocity);
+
+    // CORRECTED amp_veltrack formula
+    // amp_veltrack controls velocity sensitivity (0-100%)
+    // 100 = full response, 0 = no velocity response (constant volume)
+    if (ampVeltrack < 100.0f)
+    {
+        // Linear interpolation between constant (1.0) and velocity-based gain
+        float factor = ampVeltrack / 100.0f;
+        velocityGain = factor * velocityGain + (1.0f - factor) * 1.0f;
+    }
+
     combinedGainLinear = sampleGain * velocityGain;
 
     currentVelocity.store(velocity, std::memory_order_relaxed);

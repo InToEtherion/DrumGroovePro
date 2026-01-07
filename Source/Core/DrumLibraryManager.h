@@ -2,6 +2,7 @@
 
 #include <juce_core/juce_core.h>
 #include <juce_audio_basics/juce_audio_basics.h>
+#include <juce_graphics/juce_graphics.h>
 #include <vector>
 #include <map>
 
@@ -55,7 +56,7 @@ public:
     static juce::String getLibraryName(DrumLibrary library);
     juce::StringArray getAllLibraryNames();
     juce::StringArray getAllSourceLibraryNames();
-    DrumLibrary getLibraryFromName(const juce::String& name);
+    DrumLibrary getLibraryFromName(const juce::String& name) const;
 
     static juce::String getGMDrumName(uint8_t note);
 
@@ -95,7 +96,18 @@ public:
     bool hasCustomDrumName(DrumLibrary library, uint8_t gmNote) const;
     void clearCustomDrumName(DrumLibrary library, uint8_t gmNote);
 
-    juce::StringArray getLoadedLibraryNames();
+    // Custom note colors
+    void setCustomNoteColour(DrumLibrary library, uint8_t gmNote, const juce::Colour& colour);
+    juce::Colour getCustomNoteColour(DrumLibrary library, uint8_t gmNote) const;
+    bool hasCustomNoteColour(DrumLibrary library, uint8_t gmNote) const;
+    void clearCustomNoteColour(DrumLibrary library, uint8_t gmNote);
+    bool hasAnyCustomColours(DrumLibrary library) const;
+    static juce::Colour getDefaultColourForGMNote(uint8_t gmNote);
+
+    // Get color for a target library note (with reverse mapping lookup)
+    juce::Colour getColourForTargetNote(DrumLibrary library, uint8_t targetNote) const;
+
+    juce::StringArray getLoadedLibraryNames() const;
 
     // Get explicit mappings (for editor display)
     std::map<uint8_t, uint8_t> getExplicitMappingsForLibrary(DrumLibrary library) const;
@@ -151,6 +163,9 @@ private:
 
     // Custom drum names storage: [libraryIndex][gmNote] = customName
     std::map<int, std::map<uint8_t, juce::String>> customDrumNames;
+
+    // Custom note colors storage: [libraryIndex][gmNote] = ARGB color
+    std::map<int, std::map<uint8_t, uint32_t>> customNoteColours;
 
     // Custom mapping file management
     juce::File getCustomMappingsFile() const;

@@ -1,7 +1,8 @@
 #include "DrumGridView.h"
+#include "../../PluginProcessor.h"
 
-DrumGridView::DrumGridView(EditableMidiClip& midiClip, DrumLibraryManager& libManager)
-: clip(midiClip), drumLibraryManager(libManager), horizontalScrollbar(false)
+DrumGridView::DrumGridView(EditableMidiClip& midiClip, DrumLibraryManager& libManager, DrumGrooveProcessor& proc)
+: clip(midiClip), drumLibraryManager(libManager), processor(proc), horizontalScrollbar(false)
 {
     addAndMakeVisible(horizontalScrollbar);
     horizontalScrollbar.addListener(this);
@@ -374,44 +375,19 @@ void DrumGridView::drawNotes(juce::Graphics& g, juce::Rectangle<int> gridArea)
         {
             g.setColour(juce::Colour(0xFF00AAFF));  // Selected = bright blue
         }
+
         else
         {
-            // Color by drum part with velocity brightness
-            float brightness = 0.4f + (note.velocity / 127.0f) * 0.4f;
+            DrumLibrary targetLib = processor.getTargetLibrary();
 
-            switch (note.drumPart)
-            {
-                case DrumPartType::Kick:
-                    g.setColour(juce::Colour::fromHSV(0.0f, 0.7f, brightness, 1.0f));  // Red
-                    break;
-                case DrumPartType::Snare:
-                    g.setColour(juce::Colour::fromHSV(0.1f, 0.7f, brightness, 1.0f));  // Orange
-                    break;
-                case DrumPartType::HiHatClosed:
-                case DrumPartType::HiHatOpen:
-                    g.setColour(juce::Colour::fromHSV(0.55f, 0.6f, brightness, 1.0f));  // Cyan
-                    break;
-                case DrumPartType::Tom1:
-                case DrumPartType::Tom2:
-                case DrumPartType::Tom3:
-                case DrumPartType::FloorTom:
-                    g.setColour(juce::Colour::fromHSV(0.75f, 0.6f, brightness, 1.0f));  // Purple
-                    break;
-                case DrumPartType::Crash:
-                    g.setColour(juce::Colour::fromHSV(0.15f, 0.7f, brightness, 1.0f));  // Yellow
-                    break;
-                case DrumPartType::Ride:
-                    g.setColour(juce::Colour::fromHSV(0.3f, 0.7f, brightness, 1.0f));  // Green
-                    break;
-                case DrumPartType::Cowbell:
-                case DrumPartType::Clap:
-                case DrumPartType::Shaker:
-                    g.setColour(juce::Colour::fromHSV(0.9f, 0.5f, brightness, 1.0f));  // Pink
-                    break;
-                default:
-                    g.setColour(juce::Colour::fromHSV(0.6f, 0.4f, brightness, 1.0f));  // Gray-blue
-                    break;
-            }
+            juce::Colour noteColour = MidiDissector::getColourForNote(
+                note.noteNumber,
+                targetLib,
+                &drumLibraryManager);
+
+            float brightness = 0.4f + (note.velocity / 127.0f) * 0.4f;
+            noteColour = noteColour.withBrightness(brightness);
+            g.setColour(noteColour);
         }
 
         g.fillRect(noteRect);

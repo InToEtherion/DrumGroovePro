@@ -1,8 +1,9 @@
 #include "VelocityLaneComponent.h"
 #include "DrumGridView.h"
 
-VelocityLaneComponent::VelocityLaneComponent(EditableMidiClip& c, DrumGridView& grid)
-: clip(c), gridView(grid)
+VelocityLaneComponent::VelocityLaneComponent(EditableMidiClip& midiClip, DrumGridView& grid,
+                                             DrumLibraryManager& libMgr)
+: clip(midiClip), gridView(grid), drumLibraryManager(libMgr)
 {
     setSize(800, LANE_HEIGHT);
 }
@@ -46,7 +47,7 @@ void VelocityLaneComponent::paint(juce::Graphics& g)
             continue;
 
         // Get color based on drum part
-        juce::Colour barColour = getColourForDrumPart(note.drumPart, note.isSelected);
+        juce::Colour barColour = getColourForDrumPart(note, note.isSelected);
 
         // Draw the velocity bar
         g.setColour(barColour.withAlpha(0.8f));
@@ -134,37 +135,13 @@ int VelocityLaneComponent::yFromVelocity(int velocity) const
     return (int)((1.0f - ratio) * getHeight());
 }
 
-juce::Colour VelocityLaneComponent::getColourForDrumPart(DrumPartType partType, bool selected) const
+juce::Colour VelocityLaneComponent::getColourForDrumPart(const MidiNote& note, bool selected) const
 {
     if (selected)
-        return juce::Colour(0xFF00AAFF);  // Bright blue for selected
+        return juce::Colour(0xFF00AAFF);
 
-        // Match colors from DrumGridView
-        switch (partType)
-        {
-            case DrumPartType::Kick:
-                return juce::Colour::fromHSV(0.0f, 0.8f, 0.9f, 1.0f); // Red
-            case DrumPartType::Snare:
-                return juce::Colour::fromHSV(0.1f, 0.8f, 0.9f, 1.0f); // Orange
-            case DrumPartType::HiHatClosed:
-            case DrumPartType::HiHatOpen:
-                return juce::Colour::fromHSV(0.55f, 0.7f, 0.9f, 1.0f); // Cyan
-            case DrumPartType::Crash:
-                return juce::Colour::fromHSV(0.15f, 0.8f, 0.9f, 1.0f); // Yellow
-            case DrumPartType::Ride:
-                return juce::Colour::fromHSV(0.3f, 0.7f, 0.9f, 1.0f); // Green
-            case DrumPartType::Tom1:
-            case DrumPartType::Tom2:
-            case DrumPartType::Tom3:
-            case DrumPartType::FloorTom:
-                return juce::Colour::fromHSV(0.75f, 0.7f, 0.9f, 1.0f); // Purple
-            case DrumPartType::Cowbell:
-            case DrumPartType::Clap:
-            case DrumPartType::Shaker:
-                return juce::Colour::fromHSV(0.9f, 0.6f, 0.9f, 1.0f); // Pink
-            default:
-                return juce::Colour::fromHSV(0.6f, 0.4f, 0.7f, 1.0f); // Gray-blue
-        }
+    DrumLibrary sourceLib = clip.getSourceLibrary();
+    return MidiDissector::getColourForNote(note.noteNumber, sourceLib, &drumLibraryManager);
 }
 
 void VelocityLaneComponent::mouseDown(const juce::MouseEvent& event)

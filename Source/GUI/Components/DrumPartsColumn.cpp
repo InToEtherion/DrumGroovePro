@@ -153,6 +153,15 @@ void DrumPartsColumn::drawPartItem(juce::Graphics& g, const DrumPart& part,
     if (isSelected)
     {
         g.fillAll(part.colour.withAlpha(0.3f));
+
+        // Draw playback progress indicator
+        if (isPreviewPlaying && playbackProgress > 0.0f)
+        {
+            float progressWidth = bounds.getWidth() * playbackProgress;
+            g.setColour(part.colour.withAlpha(0.6f).darker(0.4f)); // Darker version
+            g.fillRect(0.0f, 0.0f, progressWidth, static_cast<float>(bounds.getHeight()));
+        }
+
         g.setColour(ColourPalette::primaryText);
     }
     else
@@ -332,6 +341,10 @@ void DrumPartsColumn::listBoxItemDoubleClicked(int row, const juce::MouseEvent&)
 {
     if (row >= 0 && row < drumParts.size())
     {
+        // CRITICAL: Select this row before playing so progress shows correctly
+        selectRow(row);
+        selectedRow = row;
+
         const auto& part = drumParts[row];
         playPart(part);
 
@@ -348,36 +361,26 @@ juce::var DrumPartsColumn::getDragSourceDescription(const juce::SparseSet<int>& 
         if (row >= 0 && row < drumParts.size())
         {
             const auto& part = drumParts[row];
-            return juce::var(part.getDragDescription(originalMidiFile));
+            juce::String dragDescription = part.name + "|PART|" +
+            originalMidiFile.getFullPathName() + "|" +
+            juce::String(static_cast<int>(sourceLibrary));
+            return juce::var(dragDescription);
         }
     }
     return {};
 }
 
-void DrumPartsColumn::setDrumParts(const juce::Array<DrumPart>& parts, const juce::File& sourceFile)
+void DrumPartsColumn::setDrumParts(const juce::Array<DrumPart>& parts, const juce::File& sourceFile,
+                                   DrumLibrary srcLib)
 {
     drumParts = parts;
     originalMidiFile = sourceFile;
+    sourceLibrary = srcLib;
     selectedRow = -1;
 
     deselectAllRows();
     updateContent();
-
-    // Trigger resized to update scrollbar visibility
     resized();
-
-    DBG("DrumPartsColumn: Set " + juce::String(parts.size()) + " drum parts for " + sourceFile.getFileName());
-    DBG("  Total height needed: " + juce::String(parts.size() * getRowHeight()) +
-    ", Available height: " + juce::String(getHeight()));
-
-    // Debug: Log note mapping information
-    for (int i = 0; i < parts.size(); ++i)
-    {
-        const auto& part = parts[i];
-        DBG("  Part " + juce::String(i) + ": " + part.displayName +
-        " - Original notes: " + juce::String(part.originalNotes.size()) +
-        ", Remapped notes: " + juce::String(part.remappedNotes.size()));
-    }
 }
 
 void DrumPartsColumn::clearParts()
@@ -515,7 +518,8 @@ void DrumPartsColumn::playPart(const DrumPart& part)
             double roundedTicks = numBars * ticksPerBar;
 
             // CRITICAL: Calculate duration at CURRENT BPM (from header), not file BPM
-            actualDuration = (roundedTicks / ticksPerQuarterNote) * (60.0 / currentBPM);
+            currentPartReferenceBPM = currentBPM;  // Store as reference
+            actualDuration = (roundedTicks / ticksPerQuarterNote) * (60.0 / currentPartReferenceBPM);
             actualDuration = juce::jmax(0.1, actualDuration);
 
             // Store for loop recalculation
@@ -532,8 +536,8 @@ void DrumPartsColumn::playPart(const DrumPart& part)
 
         // Add clip with CALCULATED duration
         DrumLibrary targetLib = processor.getTargetLibrary();
-        processor.midiProcessor.addMidiClip(tempFile, 0.0, targetLib, currentBPM, currentBPM, 0,
-                                            actualDuration,  // <-- USE CALCULATED DURATION
+        processor.midiProcessor.addMidiClip(tempFile, 0.0, targetLib, currentPartReferenceBPM, currentBPM, 0,
+                                            actualDuration,
                                             "drumpart_preview_" + juce::Uuid().toString());
 
         // Enable looping for preview
@@ -556,6 +560,8 @@ void DrumPartsColumn::playPart(const DrumPart& part)
     isPreviewPlaying = true;
     currentPreviewDuration = actualDuration;
     currentPreviewBPM = currentBPM;
+    playbackProgress = 0.0f;
+    repaint();
 
 }
 
@@ -675,6 +681,7 @@ void DrumPartsColumn::stopPlayback()
     isPreviewPlaying = false;
     currentPreviewDuration = 0.0;
     currentPreviewBPM = 120.0;
+    playbackProgress = 0.0f;
     stopTimer();
 }
 
@@ -683,29 +690,37 @@ void DrumPartsColumn::updatePreviewForBPMChange()
     if (!isPreviewPlaying)
         return;
 
-    // Get new BPM
+    // Only update if we have valid MIDI timing data
+    if (currentPlaybackMidiTicks <= 0.0 || currentPlaybackTPQN <= 0.0)
+        return;
+
+    // Get NEW target BPM
     bool syncToHost = processor.parameters.getRawParameterValue("syncToHost")->load() > 0.5f;
-    double newBPM = syncToHost ? processor.getHostBPM() :
+    double newTargetBPM = syncToHost ? processor.getHostBPM() :
     processor.parameters.getRawParameterValue("manualBPM")->load();
 
-    if (std::abs(newBPM - currentPreviewBPM) < 0.01)
-        return; // No significant change
+    if (std::abs(newTargetBPM - currentPreviewBPM) < 0.01)
+        return;
 
-        // Recalculate duration based on new BPM
-        // Duration scales inversely with BPM
-        double newDuration = currentPreviewDuration * (currentPreviewBPM / newBPM);
+    // CRITICAL FIX: Calculate ACTUAL playback duration at NEW target BPM
+    double actualPlaybackDuration = (currentPlaybackMidiTicks / currentPlaybackTPQN) * (60.0 / newTargetBPM);
+    actualPlaybackDuration = juce::jmax(0.1, actualPlaybackDuration);
 
-    // Update loop range
-    processor.midiProcessor.setLoopRange(0.0, newDuration);
+    // Update MidiProcessor clip to play at new target BPM
+    processor.midiProcessor.updateTrackBPM(0, newTargetBPM);
 
-    currentPreviewBPM = newBPM;
-    currentPreviewDuration = newDuration;
+    // Update loop range to actual playback duration
+    processor.midiProcessor.setLoopRange(0.0, actualPlaybackDuration);
 
-    DBG("Preview BPM changed to " + juce::String(newBPM, 2) +
-    " - New duration: " + juce::String(newDuration, 3) + "s");
+    currentPreviewBPM = newTargetBPM;
+    currentPreviewDuration = actualPlaybackDuration;
+
+    DBG("Preview BPM changed - Target: " + juce::String(newTargetBPM, 2) +
+    ", Actual duration: " + juce::String(actualPlaybackDuration, 3) + "s");
 }
 
-// NEW: Handle right-click detection
+
+// Handle right-click detection
 void DrumPartsColumn::listBoxItemClicked(int row, const juce::MouseEvent& e)
 {
     if (e.mods.isPopupMenu()) // Right-click
@@ -1086,6 +1101,20 @@ void DrumPartsColumn::startExternalDrag(int row)
 
 void DrumPartsColumn::timerCallback()
 {
+    // Update playback progress for visual indicator
+    if (isPreviewPlaying)
+    {
+        double position = processor.midiProcessor.getPlayheadPosition();
+        double duration = currentPreviewDuration;
+
+        if (duration > 0.0)
+        {
+            playbackProgress = static_cast<float>(position / duration);
+            playbackProgress = juce::jlimit(0.0f, 1.0f, playbackProgress);
+            repaint();
+        }
+    }
+
     // Monitor BPM changes during playback
     if (isPreviewPlaying && processor.midiProcessor.isPlaying())
     {

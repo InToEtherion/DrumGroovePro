@@ -63,6 +63,8 @@ public juce::ListBoxModel,
             uint8_t gmNote;
             juce::String description;
 
+            PendingMapping() : originNote(0), gmNote(0) {}
+
             bool operator==(const PendingMapping& other) const
             {
                 return originNote == other.originNote && gmNote == other.gmNote;
@@ -121,8 +123,10 @@ public juce::ListBoxModel,
             std::function<void()> onDelete;
             std::function<void()> onEdit;
             std::function<void()> onPlay;
+            std::function<void()> onValueChanged;
 
-            MappingRow(uint8_t originNote, uint8_t gmNote, const juce::String& description, bool readOnly);
+            MappingRow(uint8_t originNote, uint8_t gmNote, const juce::String& description,
+                       bool readOnly);
             ~MappingRow() override;
 
             void buttonClicked(juce::Button* button) override;

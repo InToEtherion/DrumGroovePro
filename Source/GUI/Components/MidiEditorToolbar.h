@@ -1,7 +1,7 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "EditorTool.h"
+#include "../EditorTools/EditorTool.h"
 
 class MidiEditorToolbar : public juce::Component
 {
