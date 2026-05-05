@@ -3,7 +3,7 @@
 #include "../LookAndFeel/DrumGrooveLookAndFeel.h"
 #include <utility>  // For std::pair
 
-#define CURRENT_VERSION "1.0.0RC2"
+#define CURRENT_VERSION "1.0.0"
 #define GITHUB_RELEASES_API "https://api.github.com/repos/InToEtherion/DrumGroovePro/releases"
 
 // Semantic version comparison

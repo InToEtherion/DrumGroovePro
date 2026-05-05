@@ -361,10 +361,10 @@ juce::var DrumPartsColumn::getDragSourceDescription(const juce::SparseSet<int>& 
         if (row >= 0 && row < drumParts.size())
         {
             const auto& part = drumParts[row];
-            juce::String dragDescription = part.name + "|PART|" +
-            originalMidiFile.getFullPathName() + "|" +
-            juce::String(static_cast<int>(sourceLibrary));
-            return juce::var(dragDescription);
+            // Use the DrumPart's own getDragDescription() which produces the
+            // correct format: "name|PART|filePath|partTypeInt|sourceLibInt"
+            // matching exactly what Track::handleDrumPartDrop() expects.
+            return juce::var(part.getDragDescription(originalMidiFile));
         }
     }
     return {};

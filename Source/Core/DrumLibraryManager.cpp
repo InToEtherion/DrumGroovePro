@@ -12,28 +12,37 @@ DrumLibraryManager::DrumLibraryManager()
     bool hasTargetXML = targetMappingFile.existsAsFile();
     bool hasOriginXML = originMappingFile.existsAsFile();
 
-    if (!hasTargetXML)
+    // Always start from the complete hardcoded table.
+    // This sets BOTH directions for all libraries correctly.
+    // User XML files loaded below will override only their respective directions.
+    initializeMappingTables();
+
+    // Load or save target (GM -> Library) mappings.
+    // loadCustomMappings() only writes mappings[0][libIdx], so Library->GM
+    // set by initializeMappingTables() above is preserved.
+    if (hasTargetXML)
     {
-        DBG("No target mapping XML - creating default");
-        initializeMappingTables();
+        DBG("Target XML exists - loading from file");
+        loadCustomMappings();   // overrides GM->Library with user data, does NOT touch Library->GM
+    }
+    else
+    {
+        DBG("No target XML - saving defaults from hardcoded tables");
         createDefaultMappingsFile();
     }
-    else
-    {
-        DBG("Target XML exists - loading only from file");
-        loadCustomMappings();
-    }
 
+    // Load or save origin (Library -> GM) mappings.
+    // loadOriginMappings() (after the fix) only writes mappings[libIdx][0],
+    // so GM->Library set above is preserved.
     if (hasOriginXML)
     {
-        DBG("Origin XML exists - loading only from file");
-        loadOriginMappings();
+        DBG("Origin XML exists - loading from file");
+        loadOriginMappings();   // overrides Library->GM with user data, does NOT touch GM->Library
     }
     else
     {
-        DBG("No origin XML - creating from hardcoded mappings");
-        initializeHardcodedMappings();
-        saveOriginMappings();
+        DBG("No origin XML - saving defaults from hardcoded tables");
+        saveOriginMappings();   // all Library->GM data already in memory from initializeMappingTables()
     }
 }
 
@@ -1692,14 +1701,12 @@ void DrumLibraryManager::loadCustomMappings()
 
     DBG("Loading target drum mappings from: " + mappingFile.getFullPathName());
 
-    // Clear existing mappings to avoid mixing old and new
-    mappings.clear();
-
-    // Initialize GM to itself (always needed)
-    for (uint8_t note = 0; note < 128; ++note)
-    {
-        mappings[0][0][note] = note;
-    }
+    // NOTE: We intentionally do NOT call mappings.clear() here.
+    // initializeMappingTables() in the constructor already set the full correct
+    // state for both directions. This function only overrides the GM->Library
+    // direction (mappings[0][libIdx]) with whatever is stored in the user's XML.
+    // The Library->GM direction (mappings[libIdx][0]) is managed separately by
+    // loadOriginMappings() and must not be touched here.
 
     int librariesLoaded = 0;
     int totalMappingsLoaded = 0;
@@ -1728,17 +1735,13 @@ void DrumLibraryManager::loadCustomMappings()
                     uint8_t gmNote = static_cast<uint8_t>(noteElement->getIntAttribute("gmNote"));
                     uint8_t productNote = static_cast<uint8_t>(noteElement->getIntAttribute("productNote"));
 
-                    // FIXED: Only store GM -> Library mapping for TARGET libraries
-                    // DO NOT create reverse mapping here - that corrupts origin mappings!
-                    // Origin mappings (Library -> GM) are handled by initializeHardcodedMappings()
-                    mappings[0][libIndex][gmNote] = productNote;  // GM -> Library (TARGET only)
+                    // Only store GM -> Library (target direction)
+                    mappings[0][libIndex][gmNote] = productNote;
 
-                    // Load custom drum name if present
                     juce::String customName = noteElement->getStringAttribute("customName");
                     if (customName.isNotEmpty())
-                    {
                         customDrumNames[libIndex][gmNote] = customName;
-                    }
+
                     juce::String colourString = noteElement->getStringAttribute("colour");
                     if (colourString.isNotEmpty())
                     {
@@ -1756,7 +1759,6 @@ void DrumLibraryManager::loadCustomMappings()
         }
         else if (libElement->hasTagName("CustomLibrary"))
         {
-            // Load custom library
             juce::String name = libElement->getStringAttribute("name");
             int enumValue = libElement->getIntAttribute("enum");
 
@@ -1778,15 +1780,11 @@ void DrumLibraryManager::loadCustomMappings()
                     uint8_t gmNote = static_cast<uint8_t>(noteElement->getIntAttribute("gmNote"));
                     uint8_t productNote = static_cast<uint8_t>(noteElement->getIntAttribute("productNote"));
 
-                    // FIXED: Only store GM -> Library mapping for custom TARGET libraries
                     mappings[0][libIndex][gmNote] = productNote;
 
-                    // Load custom drum name if present
                     juce::String customName = noteElement->getStringAttribute("customName");
                     if (customName.isNotEmpty())
-                    {
                         customDrumNames[libIndex][gmNote] = customName;
-                    }
 
                     mappingCount++;
                     totalMappingsLoaded++;
@@ -2092,9 +2090,12 @@ void DrumLibraryManager::loadOriginMappings()
             uint8_t originNote = static_cast<uint8_t>(noteElement->getIntAttribute("originNote"));
             uint8_t gmNote = static_cast<uint8_t>(noteElement->getIntAttribute("gmNote"));
 
-            // Store bidirectional mapping
-            mappings[originIndex][0][originNote] = gmNote;  // Origin -> GM
-            mappings[0][originIndex][gmNote] = originNote;  // GM -> Origin
+            // ONLY store the Origin -> GM direction.
+            // DO NOT store the reverse (GM -> Origin) here because that slot
+            // is exclusively managed by the target XML (loadCustomMappings /
+            // initializeMappingTables). Writing it here would corrupt target
+            // mappings whenever the target XML is regenerated.
+            mappings[originIndex][0][originNote] = gmNote;  // Origin -> GM only
 
             // Load custom drum name if present
             juce::String customName = noteElement->getStringAttribute("customName");

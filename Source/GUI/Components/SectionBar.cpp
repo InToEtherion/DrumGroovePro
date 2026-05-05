@@ -41,133 +41,192 @@ void SectionBar::setupComponents()
     prevSectionButton->setTooltip("Previous Section");
     prevSectionButton->onClick = [this] { navigateToPrevSection(); };
     addAndMakeVisible(prevSectionButton.get());
-    
+
     nextSectionButton = std::make_unique<juce::TextButton>(">");
     nextSectionButton->setTooltip("Next Section");
     nextSectionButton->onClick = [this] { navigateToNextSection(); };
     addAndMakeVisible(nextSectionButton.get());
-    
+
     sectionInfoLabel = std::make_unique<juce::Label>("", "Section 1/1");
     sectionInfoLabel->setFont(juce::Font(13.0f, juce::Font::bold));
     sectionInfoLabel->setJustificationType(juce::Justification::centred);
     addAndMakeVisible(sectionInfoLabel.get());
-    
+
     // Time signature
     timeSigLabel = std::make_unique<juce::Label>("", "TIME SIG:");
     timeSigLabel->setFont(juce::Font(11.0f, juce::Font::bold));
     timeSigLabel->setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(timeSigLabel.get());
-    
+
     timeSigCombo = std::make_unique<juce::ComboBox>();
     const auto& timeSigs = getCommonTimeSignatures();
     for (int i = 0; i < static_cast<int>(timeSigs.size()); ++i)
         timeSigCombo->addItem(timeSigs[i].display, i + 1);
     timeSigCombo->onChange = [this] { /* Only affects next +ADD */ };
     addAndMakeVisible(timeSigCombo.get());
-    
-    // Bars
+
+    // ── BARS ──────────────────────────────────────────────────────────────────
     barsLabel = std::make_unique<juce::Label>("", "BARS:");
     barsLabel->setFont(juce::Font(11.0f, juce::Font::bold));
     barsLabel->setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(barsLabel.get());
-    
+
     barsValueLabel = std::make_unique<juce::Label>("", "4");
     barsValueLabel->setFont(juce::Font(14.0f));
     barsValueLabel->setJustificationType(juce::Justification::centred);
+    barsValueLabel->setTooltip("Double-click to type a value (1 – 32)");
+    // Make the label editable on double-click, in-place (no popup window)
+    barsValueLabel->setEditable(false, true, false);
+    barsValueLabel->onTextChange = [this]
+    {
+        int newVal = juce::jlimit(1, 32, barsValueLabel->getText().getIntValue());
+        // Keep label showing the clamped value
+        barsValueLabel->setText(juce::String(newVal), juce::dontSendNotification);
+        // Drive the slider so updateSelectedSection() sees the change
+        barsSlider->setValue(static_cast<double>(newVal), juce::dontSendNotification);
+        updateSelectedSection();
+    };
     addAndMakeVisible(barsValueLabel.get());
-    
+
     barsSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
     barsSlider->setRange(1.0, 32.0, 1.0);
     barsSlider->setValue(4.0);
-    barsSlider->onValueChange = [this] {
-        barsValueLabel->setText(juce::String(static_cast<int>(barsSlider->getValue())), juce::dontSendNotification);
+    barsSlider->onValueChange = [this]
+    {
+        int val = static_cast<int>(barsSlider->getValue());
+        barsValueLabel->setText(juce::String(val), juce::dontSendNotification);
         updateSelectedSection();
     };
     addAndMakeVisible(barsSlider.get());
-    
-    // Grid BPM
+
+    // ── GRID BPM ──────────────────────────────────────────────────────────────
     bpmLabel = std::make_unique<juce::Label>("", "GRID BPM:");
     bpmLabel->setFont(juce::Font(11.0f, juce::Font::bold));
     bpmLabel->setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(bpmLabel.get());
-    
+
     bpmValueLabel = std::make_unique<juce::Label>("", "120");
     bpmValueLabel->setFont(juce::Font(14.0f));
     bpmValueLabel->setJustificationType(juce::Justification::centred);
+    bpmValueLabel->setTooltip("Double-click to type a value (40 – 300). Disabled when 'Global Grid' is active.");
+    bpmValueLabel->setEditable(false, true, false);
+    bpmValueLabel->onTextChange = [this]
+    {
+        // Only apply when the slider is actually active (not using global BPM)
+        if (!bpmSlider->isEnabled())
+        {
+            // Restore the displayed value so the label doesn't show garbage
+            bpmValueLabel->setText(juce::String(static_cast<int>(bpmSlider->getValue())),
+                                   juce::dontSendNotification);
+            return;
+        }
+        int newVal = juce::jlimit(40, 300, bpmValueLabel->getText().getIntValue());
+        bpmValueLabel->setText(juce::String(newVal), juce::dontSendNotification);
+        bpmSlider->setValue(static_cast<double>(newVal), juce::dontSendNotification);
+        updateSelectedSection();
+    };
     addAndMakeVisible(bpmValueLabel.get());
-    
+
     bpmSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
     bpmSlider->setRange(40.0, 300.0, 1.0);
     bpmSlider->setValue(120.0);
-    bpmSlider->onValueChange = [this] {
-        bpmValueLabel->setText(juce::String(static_cast<int>(bpmSlider->getValue())), juce::dontSendNotification);
+    bpmSlider->onValueChange = [this]
+    {
+        int val = static_cast<int>(bpmSlider->getValue());
+        bpmValueLabel->setText(juce::String(val), juce::dontSendNotification);
         updateSelectedSection();
     };
     addAndMakeVisible(bpmSlider.get());
-    
+
     useGlobalBPMButton = std::make_unique<juce::ToggleButton>("Global Grid");
     useGlobalBPMButton->setToggleState(true, juce::dontSendNotification);
-    useGlobalBPMButton->onClick = [this] {
-        bpmSlider->setEnabled(!useGlobalBPMButton->getToggleState());
+    useGlobalBPMButton->onClick = [this]
+    {
+        bool usingGlobal = useGlobalBPMButton->getToggleState();
+        bpmSlider->setEnabled(!usingGlobal);
+        // Value label should look editable only when slider is active
+        bpmValueLabel->setEnabled(!usingGlobal);
         updateSelectedSection();
     };
     addAndMakeVisible(useGlobalBPMButton.get());
-    
-    // Playback BPM
+
+    // ── SPEED BPM ─────────────────────────────────────────────────────────────
     playbackBPMLabel = std::make_unique<juce::Label>("", "SPEED BPM:");
     playbackBPMLabel->setFont(juce::Font(11.0f, juce::Font::bold));
     playbackBPMLabel->setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(playbackBPMLabel.get());
-    
+
     playbackBPMValueLabel = std::make_unique<juce::Label>("", "120");
     playbackBPMValueLabel->setFont(juce::Font(14.0f));
     playbackBPMValueLabel->setJustificationType(juce::Justification::centred);
+    playbackBPMValueLabel->setTooltip("Double-click to type a value (40 – 300). Disabled when 'Global Speed' is active.");
+    playbackBPMValueLabel->setEditable(false, true, false);
+    playbackBPMValueLabel->onTextChange = [this]
+    {
+        if (!playbackBPMSlider->isEnabled())
+        {
+            playbackBPMValueLabel->setText(
+                juce::String(static_cast<int>(playbackBPMSlider->getValue())),
+                                           juce::dontSendNotification);
+            return;
+        }
+        int newVal = juce::jlimit(40, 300, playbackBPMValueLabel->getText().getIntValue());
+        playbackBPMValueLabel->setText(juce::String(newVal), juce::dontSendNotification);
+        playbackBPMSlider->setValue(static_cast<double>(newVal), juce::dontSendNotification);
+        updateSelectedSection();
+    };
     addAndMakeVisible(playbackBPMValueLabel.get());
-    
+
     playbackBPMSlider = std::make_unique<juce::Slider>(juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
     playbackBPMSlider->setRange(40.0, 300.0, 1.0);
     playbackBPMSlider->setValue(120.0);
-    playbackBPMSlider->onValueChange = [this] {
-        playbackBPMValueLabel->setText(juce::String(static_cast<int>(playbackBPMSlider->getValue())), juce::dontSendNotification);
+    playbackBPMSlider->onValueChange = [this]
+    {
+        int val = static_cast<int>(playbackBPMSlider->getValue());
+        playbackBPMValueLabel->setText(juce::String(val), juce::dontSendNotification);
         updateSelectedSection();
     };
     addAndMakeVisible(playbackBPMSlider.get());
-    
+
     useGlobalPlaybackBPMButton = std::make_unique<juce::ToggleButton>("Global Speed");
     useGlobalPlaybackBPMButton->setToggleState(true, juce::dontSendNotification);
-    useGlobalPlaybackBPMButton->onClick = [this] {
-        playbackBPMSlider->setEnabled(!useGlobalPlaybackBPMButton->getToggleState());
+    useGlobalPlaybackBPMButton->onClick = [this]
+    {
+        bool usingGlobal = useGlobalPlaybackBPMButton->getToggleState();
+        playbackBPMSlider->setEnabled(!usingGlobal);
+        playbackBPMValueLabel->setEnabled(!usingGlobal);
         updateSelectedSection();
     };
     addAndMakeVisible(useGlobalPlaybackBPMButton.get());
-    
-    // Section name
+
+    // ── SECTION NAME ──────────────────────────────────────────────────────────
     sectionNameLabel = std::make_unique<juce::Label>("", "NAME:");
     sectionNameLabel->setFont(juce::Font(11.0f, juce::Font::bold));
     sectionNameLabel->setJustificationType(juce::Justification::centredLeft);
     addAndMakeVisible(sectionNameLabel.get());
-    
+
     sectionNameEditor = std::make_unique<juce::TextEditor>();
     sectionNameEditor->setMultiLine(false);
     sectionNameEditor->setReturnKeyStartsNewLine(false);
     sectionNameEditor->onTextChange = [this] { updateSelectedSection(); };
     addAndMakeVisible(sectionNameEditor.get());
-    
+
     // Loop section button
     loopSectionButton = std::make_unique<juce::ToggleButton>("Loop Section");
-    loopSectionButton->onClick = [this] {
+    loopSectionButton->onClick = [this]
+    {
         if (loopSectionButton->getToggleState())
             enableSectionLoop();
         else
             disableSectionLoop();
     };
     addAndMakeVisible(loopSectionButton.get());
-    
+
     // Add/Remove buttons
     addSectionButton = std::make_unique<juce::TextButton>("+ ADD");
     addSectionButton->onClick = [this] { addSection(); };
     addAndMakeVisible(addSectionButton.get());
-    
+
     removeSectionButton = std::make_unique<juce::TextButton>("x REMOVE");
     removeSectionButton->onClick = [this] { removeSection(); };
     addAndMakeVisible(removeSectionButton.get());
