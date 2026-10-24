@@ -211,7 +211,7 @@ void TimelineContent::drawBarGrid(juce::Graphics& g)
 
         // Use larger, bolder font
         g.setFont(16.0f);  // Increased from 12.0f to 16.0f
-        int labelWidth = g.getCurrentFont().getStringWidth(label) + 12;  // Add padding
+        int labelWidth = juce::GlyphArrangement::getStringWidthInt(g.getCurrentFont(), label) + 12;  // Add padding
         int labelHeight = 22;
         int labelX = static_cast<int>(startX + (sectionWidth - labelWidth) / 2.0f);  // Center
         int labelY = 4;
